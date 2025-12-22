@@ -1,0 +1,21 @@
+spring:
+  application:
+    name: vertex-agent-demo
+
+  ai:
+    vertex:
+      ai:
+        gemini:
+          project-id: eainde
+          location: europe-west4 # or europe-west4, etc.
+          chat:
+            options:
+              model: gemini-2.0-flash
+              temperature: 0.7
+
+agent:
+  max-iterations: 10
+  audit.enabled: true
+
+server:
+  port: 8080
