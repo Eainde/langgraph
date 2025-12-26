@@ -25,31 +25,6 @@ ON DELETE CASCADE
 );
 
 
-@PostMapping(value = "/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-public Flux<String> streamChat(@RequestBody String userPrompt) {
-
-        // Flux.create bridges the asynchronous callback to a Reactive Stream
-        return Flux.create(sink -> {
-            
-            chatModel.generate(userPrompt, new StreamingResponseHandler<AiMessage>() {
-                
-                @Override
-                public void onNext(String token) {
-                    // Emit each new token to the Flux
-                    sink.next(token);
-                }
-
-                @Override
-                public void onComplete(Response<AiMessage> response) {
-                    // Signal the stream is finished
-                    sink.complete();
-                }
-
-                @Override
-                public void onError(Throwable error) {
-                    // Propagate errors to the Flux
-                    sink.error(error);
-                }
-            });
-        });
-    }
+curl -N -X POST http://localhost:8080/api/chat/stream \
+-H "Content-Type: text/plain" \
+-d "Write a short poem about clouds."
