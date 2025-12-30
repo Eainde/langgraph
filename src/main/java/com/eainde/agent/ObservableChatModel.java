@@ -1,11 +1,9 @@
 package com.eainde.agent;
 
-import dev.langchain4j.data.message.AiMessage;
-import dev.langchain4j.data.message.ChatMessage;
-import dev.langchain4j.model.chat.ChatLanguageModel;
+import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.model.chat.listener.*;
-import dev.langchain4j.model.output.Response;
-import dev.langchain4j.model.output.TokenUsage;
+import dev.langchain4j.model.chat.request.ChatRequest;
+import dev.langchain4j.model.chat.response.ChatResponse;
 
 import java.util.Collections;
 import java.util.List;
@@ -13,27 +11,25 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * A Decorator that adds Observability (Listeners) to ANY ChatLanguageModel.
- * Use this to wrap models that don't support listeners in their constructors.
+ * Decorator for LangChain4j 0.35+ ChatModel.
+ * Adds observability (listeners) to any ChatModel (like VertexAI, OpenAI, etc.).
  */
-public class ObservableChatModel implements ChatLanguageModel {
+public class ObservableChatModel implements ChatModel {
 
-    private final ChatLanguageModel delegate;
+    private final ChatModel delegate;
     private final List<ChatModelListener> listeners;
 
-    public ObservableChatModel(ChatLanguageModel delegate, List<ChatModelListener> listeners) {
+    public ObservableChatModel(ChatModel delegate, List<ChatModelListener> listeners) {
         this.delegate = delegate;
         this.listeners = listeners != null ? listeners : Collections.emptyList();
     }
 
     @Override
-    public Response<AiMessage> generate(List<ChatMessage> messages) {
+    public ChatResponse chat(ChatRequest request) {
         // 1. Prepare Context
-        ChatModelRequest modelRequest = ChatModelRequest.builder()
-                .messages(messages)
-                .build();
+        // In the new API, we don't need to build a request manually; we already have the ChatRequest.
         Map<Object, Object> attributes = new ConcurrentHashMap<>();
-        ChatModelRequestContext requestContext = new ChatModelRequestContext(modelRequest, attributes);
+        ChatModelRequestContext requestContext = new ChatModelRequestContext(request, attributes);
 
         // 2. Notify Listeners (OnRequest)
         listeners.forEach(l -> {
@@ -45,17 +41,13 @@ public class ObservableChatModel implements ChatLanguageModel {
         });
 
         try {
-            // 3. Delegate to the Real Model (Vertex AI)
-            Response<AiMessage> response = delegate.generate(messages);
+            // 3. Delegate to the Real Model
+            ChatResponse response = delegate.chat(request);
 
             // 4. Notify Listeners (OnResponse)
-            ChatModelResponse modelResponse = ChatModelResponse.builder()
-                    .aiMessage(response.content())
-                    .tokenUsage(response.tokenUsage())
-                    .build();
             ChatModelResponseContext responseContext = new ChatModelResponseContext(
-                    modelResponse,
-                    modelRequest,
+                    response,
+                    request,
                     attributes
             );
 
@@ -71,12 +63,14 @@ public class ObservableChatModel implements ChatLanguageModel {
 
         } catch (Exception e) {
             // 5. Notify Listeners (OnError)
+            // Note: Partial response is null here as this is a blocking call
             ChatModelErrorContext errorContext = new ChatModelErrorContext(
                     e,
-                    modelRequest,
+                    request,
                     null,
                     attributes
             );
+
             listeners.forEach(l -> {
                 try {
                     l.onError(errorContext);
