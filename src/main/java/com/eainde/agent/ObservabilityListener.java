@@ -23,38 +23,34 @@ public class ObservabilityListener implements ChatModelListener {
         requestContext.attributes().put("startTime", System.currentTimeMillis());
     }
 
-    /**
-     * Helper method to iterate through messages and hide file contents.
-     */
     private String formatMessages(List<ChatMessage> messages) {
         if (messages == null) return "[]";
+        return messages.stream()
+                .map(this::formatSingleMessage)
+                .collect(Collectors.joining(" | "));
+    }
 
-        return messages.stream().map(message -> {
-            String type = message.type().toString();
+    private String formatSingleMessage(ChatMessage message) {
+        // UserMessages are special because they contain the File/Image content
+        if (message instanceof UserMessage) {
+            UserMessage userMsg = (UserMessage) message;
+            return "USER: " + userMsg.contents().stream()
+                    .map(this::formatContent)
+                    .collect(Collectors.joining(" "));
+        }
 
-            if (message instanceof UserMessage) {
-                UserMessage userMsg = (UserMessage) message;
-                // UserMessages can contain multiple "Contents" (Text + Files)
-                String contentSummary = userMsg.contents().stream()
-                        .map(this::formatContent)
-                        .collect(Collectors.joining(" | "));
-                return type + ": " + contentSummary;
-            } else {
-                // System and AI messages usually just have text
-                return type + ": " + message.text();
-            }
-        }).collect(Collectors.joining("\n"));
+        // For System or AI messages, printing the text is usually safe
+        return message.type() + ": " + message.text();
     }
 
     private String formatContent(Content content) {
         if (content instanceof TextContent) {
             return ((TextContent) content).text();
         } else if (content instanceof ImageContent) {
-            // Replaces the massive base64/URL string with a simple tag
-            return "[Image/File Content]";
+            // This replaces the massive base64 string with a simple tag
+            return "[FILE/IMAGE CONTENT HIDDEN]";
         } else {
-            // Handles any other binary types (Audio, Video, etc.)
-            return "[Media Content: " + content.getClass().getSimpleName() + "]";
+            return "[BINARY CONTENT HIDDEN]";
         }
     }
 
