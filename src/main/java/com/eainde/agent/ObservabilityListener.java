@@ -33,32 +33,50 @@ public class ObservabilityListener implements ChatModelListener {
     private String formatSingleMessage(ChatMessage message) {
         if (message instanceof UserMessage) {
             UserMessage userMsg = (UserMessage) message;
+            // Iterate over contents to strip out images/files but keep text
             return "USER: " + userMsg.contents().stream()
                     .map(this::formatContent)
                     .collect(Collectors.joining(" "));
         }
-        else if (message instanceof AiMessage) {
-            // AiMessage requires a cast to access .text()
-            return "AI: " + ((AiMessage) message).text();
-        }
         else if (message instanceof SystemMessage) {
-            // SystemMessage requires a cast to access .text()
+            // CASTING to SystemMessage to access .text()
             return "SYSTEM: " + ((SystemMessage) message).text();
         }
+        else if (message instanceof AiMessage) {
+            // CASTING to AiMessage to access .text()
+            return "AI: " + ((AiMessage) message).text();
+        }
         else {
-            // Fallback for other types (like ToolExecutionResultMessage)
-            return message.type() + ": [Complex Message]";
+            // Fallback for tools or other unknown types
+            return message.type() + ": [Complex/Tool Message]";
         }
     }
 
     private String formatContent(Content content) {
         if (content instanceof TextContent) {
-            return ((TextContent) content).text();
+            String text = ((TextContent) content).text();
+
+            // CHECK: Is this text actually a stringified UserMessage?
+            if (text.contains("UserMessage {") && text.contains("base64Data")) {
+                return extractCleanText(text);
+            }
+            return text;
         } else if (content instanceof ImageContent) {
             return "[FILE/IMAGE CONTENT HIDDEN]";
         } else {
             return "[BINARY CONTENT HIDDEN]";
         }
+    }
+
+    private String extractCleanText(String rawText) {
+        // 1. Try to extract the 'name' field, as that seems to hold your real prompt
+        Matcher matcher = NESTED_NAME_PATTERN.matcher(rawText);
+        if (matcher.find()) {
+            return matcher.group(1); // Returns "Can you read the attached file..."
+        }
+
+        // 2. Fallback: If name isn't found, just strip the base64 data from the string
+        return BASE64_PATTERN.matcher(rawText).replaceAll("base64Data = [HIDDEN]");
     }
 
     @Override
