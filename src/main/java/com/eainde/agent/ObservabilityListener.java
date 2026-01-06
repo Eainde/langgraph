@@ -31,23 +31,30 @@ public class ObservabilityListener implements ChatModelListener {
     }
 
     private String formatSingleMessage(ChatMessage message) {
-        // UserMessages are special because they contain the File/Image content
         if (message instanceof UserMessage) {
             UserMessage userMsg = (UserMessage) message;
             return "USER: " + userMsg.contents().stream()
                     .map(this::formatContent)
                     .collect(Collectors.joining(" "));
         }
-
-        // For System or AI messages, printing the text is usually safe
-        return message.type() + ": " + message.text();
+        else if (message instanceof AiMessage) {
+            // AiMessage requires a cast to access .text()
+            return "AI: " + ((AiMessage) message).text();
+        }
+        else if (message instanceof SystemMessage) {
+            // SystemMessage requires a cast to access .text()
+            return "SYSTEM: " + ((SystemMessage) message).text();
+        }
+        else {
+            // Fallback for other types (like ToolExecutionResultMessage)
+            return message.type() + ": [Complex Message]";
+        }
     }
 
     private String formatContent(Content content) {
         if (content instanceof TextContent) {
             return ((TextContent) content).text();
         } else if (content instanceof ImageContent) {
-            // This replaces the massive base64 string with a simple tag
             return "[FILE/IMAGE CONTENT HIDDEN]";
         } else {
             return "[BINARY CONTENT HIDDEN]";
