@@ -10,6 +10,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 public class ObservabilityListener implements ChatModelListener {
+    private static final Pattern NESTED_NAME_PATTERN = Pattern.compile("name\\s*=\\s*\"([^\"]+)\"");
+    // Matches: base64Data = ... (until the next comma or closing brace)
+    private static final Pattern BASE64_PATTERN = Pattern.compile("base64Data\\s*=\\s*[^,}\\]]+");
 
     private static final Logger log = LoggerFactory.getLogger(ObservabilityListener.class);
 
