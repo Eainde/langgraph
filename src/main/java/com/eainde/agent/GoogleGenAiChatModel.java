@@ -1,5 +1,7 @@
 package com.example.langchain4j.google;
 
+package com.example.langchain4j.google;
+
 import com.google.auth.oauth2.GoogleCredentials;
 import com.google.genai.Client;
 import com.google.genai.types.*;
@@ -16,7 +18,7 @@ import dev.langchain4j.model.chat.request.DefaultChatRequestParameters;
 import dev.langchain4j.model.chat.request.ResponseFormatType;
 import dev.langchain4j.model.chat.request.ToolChoice;
 import dev.langchain4j.model.chat.response.ChatResponse;
-import dev.langchain4j.modetool.output.FinishReason;
+import dev.langchain4j.model.output.FinishReason;
 import dev.langchain4j.model.output.TokenUsage;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -30,6 +32,10 @@ import static dev.langchain4j.internal.ValidationUtils.ensureNotBlank;
 import static java.util.Collections.emptyList;
 import static java.util.Collections.singletonList;
 
+/**
+ * Robust LangChain4j ChatModel for Google Gen AI SDK.
+ * Handles Optional unwrapping and correct API access patterns.
+ */
 public class GoogleGenAiChatModel implements ChatModel {
 
     private static final Logger log = LoggerFactory.getLogger(GoogleGenAiChatModel.class);
@@ -56,17 +62,21 @@ public class GoogleGenAiChatModel implements ChatModel {
         this.allowedFunctionNames = builder.allowedFunctionNames;
         this.toolConfig = builder.toolConfig;
 
+        // Map Safety Settings
         this.safetySettings = new HashMap<>();
         if (builder.safetySettings != null) {
             builder.safetySettings.forEach((k, v) -> this.safetySettings.put(k.toString(), v.toString()));
         }
 
+        // Initialize Client
         if (builder.client != null) {
             this.client = builder.client;
         } else {
+            // Configure HttpOptions for Timeout
             HttpOptions.Builder httpOptions = HttpOptions.builder();
             if (builder.timeout != null) {
-                // FIXED: Cast to int as required by some SDK versions
+                // Cast to int if your specific SDK version requires it, or use .toMillis() (long) if supported.
+                // Using (int) is safer for older generated clients.
                 httpOptions.timeout((int) builder.timeout.toMillis());
             }
 
@@ -83,6 +93,7 @@ public class GoogleGenAiChatModel implements ChatModel {
             this.client = clientBuilder.build();
         }
 
+        // Default Parameters
         this.defaultRequestParameters = DefaultChatRequestParameters.builder()
                 .temperature(builder.temperature)
                 .maxOutputTokens(builder.maxOutputTokens)
@@ -119,6 +130,7 @@ public class GoogleGenAiChatModel implements ChatModel {
         if (parameters.maxOutputTokens() != null) configBuilder.maxOutputTokens(parameters.maxOutputTokens());
         if (parameters.stopSequences() != null) configBuilder.stopSequences(parameters.stopSequences());
 
+        // Apply Safety Settings
         if (!safetySettings.isEmpty()) {
             List<SafetySetting> safetyList = new ArrayList<>();
             safetySettings.forEach((cat, thresh) ->
@@ -127,23 +139,27 @@ public class GoogleGenAiChatModel implements ChatModel {
             configBuilder.safetySettings(safetyList);
         }
 
+        // Apply System Instruction
         if (systemInstruction.length() > 0) {
             configBuilder.systemInstruction(Content.builder()
                     .parts(singletonList(Part.builder().text(systemInstruction.toString()).build()))
                     .build());
         }
 
+        // JSON Mode
         if (parameters.responseFormat() != null && parameters.responseFormat().type() == ResponseFormatType.JSON) {
             configBuilder.responseMimeType("application/json");
         }
 
-        // 3. Tools
+        // 3. Configure Tools
         List<Tool> requestTools = new ArrayList<>();
 
+        // A. Google Search
         if (this.googleSearchEnabled) {
             requestTools.add(Tool.builder().googleSearch(GoogleSearch.builder().build()).build());
         }
 
+        // B. Function Calling
         List<ToolSpecification> toolSpecs = parameters.toolSpecifications();
         if (!isNullOrEmpty(toolSpecs)) {
             List<FunctionDeclaration> decls = toolSpecs.stream()
@@ -152,18 +168,19 @@ public class GoogleGenAiChatModel implements ChatModel {
 
             requestTools.add(Tool.builder().functionDeclarations(decls).build());
 
+            // Handle ToolChoice
             FunctionCallingConfig.Builder funcConfig = FunctionCallingConfig.builder();
 
-            // FIXED: Strict Enum usage (AUTO, REQUIRED, NONE)
+            // Map LC4j ToolChoice to Google Mode
             if (parameters.toolChoice() == ToolChoice.REQUIRED) {
-                funcConfig.mode("ANY");
+                funcConfig.mode("ANY"); // Forces the model to use a tool
             } else if (parameters.toolChoice() == ToolChoice.NONE) {
                 funcConfig.mode("NONE");
             } else {
                 funcConfig.mode("AUTO");
             }
 
-            // Support Named Tool Choice via Builder configuration if 'REQUIRED' is used
+            // Apply Allowed Function Names (Pre-configured)
             if (!isNullOrEmpty(this.allowedFunctionNames)) {
                 funcConfig.allowedFunctionNames(this.allowedFunctionNames);
             }
@@ -177,15 +194,15 @@ public class GoogleGenAiChatModel implements ChatModel {
             configBuilder.tools(requestTools);
         }
 
+        // 4. Execute Request
         if (logRequests) log.info("Google Request: model={}, msgCount={}", modelName, messages.size());
 
-        // 4. Execute
         GenerateContentResponse result = null;
         RuntimeException lastException = null;
 
         for (int i = 0; i <= maxRetries; i++) {
             try {
-                // FIXED: Use field access 'client.models' instead of method call
+                // Access 'models' field directly
                 result = client.models.generateContent(modelName, contents, configBuilder.build());
                 break;
             } catch (Exception e) {
@@ -206,32 +223,25 @@ public class GoogleGenAiChatModel implements ChatModel {
         return chatResponse;
     }
 
+    // --- Standard Interface Methods ---
     @Override
-    public ChatRequestParameters defaultRequestParameters() {
-        return defaultRequestParameters;
-    }
-
-    @Override
-    public List<ChatModelListener> listeners() {
-        return listeners;
-    }
+    public ChatRequestParameters defaultRequestParameters() { return defaultRequestParameters; }
 
     @Override
-    public ModelProvider provider() {
-        return ModelProvider.GOOGLE_VERTEX_AI;
-    }
+    public List<ChatModelListener> listeners() { return listeners; }
 
     @Override
-    public Set<Capability> supportedCapabilities() {
-        // FIXED: Removed non-existent TOOL_EXECUTION capability
-        return Set.of(Capability.RESPONSE_FORMAT_JSON);
-    }
+    public ModelProvider provider() { return ModelProvider.GOOGLE_VERTEX_AI; }
 
-    // --- Mapper Helper ---
+    @Override
+    public Set<Capability> supportedCapabilities() { return Set.of(Capability.RESPONSE_FORMAT_JSON); }
 
+    // =================================================================================================
+    // ROBUST MAPPER
+    // =================================================================================================
     private static class GoogleGenAiMapper {
+
         static Content toContent(ChatMessage message) {
-            // FIXED: Use message.text() directly
             if (message instanceof UserMessage) {
                 return Content.builder().role("user")
                         .parts(singletonList(Part.builder().text(message.text()).build()))
@@ -244,7 +254,7 @@ public class GoogleGenAiChatModel implements ChatModel {
                 }
                 if (aiMsg.toolExecutionRequests() != null) {
                     for (ToolExecutionRequest req : aiMsg.toolExecutionRequests()) {
-                        Map<String, Object> args = new HashMap<>();
+                        Map<String, Object> args = new HashMap<>(); // Placeholder for argument map
                         parts.add(Part.builder()
                                 .functionCall(FunctionCall.builder().name(req.name()).args(args).build())
                                 .build());
@@ -275,8 +285,7 @@ public class GoogleGenAiChatModel implements ChatModel {
         }
 
         static ChatResponse toChatResponse(GenerateContentResponse response) {
-            // 1. Safety Check: Candidates (Handle Optional<List<Candidate>>)
-            // We safely unwrap the list, or use an empty list if missing.
+            // 1. Safety Check: Candidates (Handle Optional<List>)
             List<Candidate> candidates = response.candidates().orElse(Collections.emptyList());
 
             if (candidates.isEmpty()) {
@@ -289,36 +298,27 @@ public class GoogleGenAiChatModel implements ChatModel {
 
             Candidate candidate = candidates.get(0);
 
-            // 2. Safety Check: Content (Handle Optional<Content>)
-            Content content = candidate.content().orElse(null);
-
+            // 2. Safety Check: Content & Parts (Handle Optionals)
             StringBuilder textBuilder = new StringBuilder();
             List<ToolExecutionRequest> toolRequests = new ArrayList<>();
 
-            // 3. Safety Check: Parts (Handle Optional<List<Part>>)
+            Content content = candidate.content().orElse(null);
+
             if (content != null) {
-                // Safely unwrap the list of parts
                 List<Part> parts = content.parts().orElse(Collections.emptyList());
 
                 for (Part part : parts) {
-                    // A. Extract Text (some versions return String, some Optional<String>)
-                    // We assume text() returns String here based on standard patterns,
-                    // but if it's Optional, use: part.text().ifPresent(textBuilder::append);
+                    // Extract Text
                     if (part.text() != null) {
                         textBuilder.append(part.text());
                     }
 
-                    // B. Extract Function Call (Handle Optional<FunctionCall>)
+                    // Extract Function Call (Handle nested Optionals)
                     if (part.functionCall().isPresent()) {
                         FunctionCall fc = part.functionCall().get();
 
-                        // C. Extract Name (Handle Optional<String>)
-                        String fnName = fc.name().orElse("unknown_tool");
-
-                        // D. Extract Args (Handle Optional<Map<String, Object>>)
-                        String fnArgs = fc.args()
-                                .map(map -> map.toString()) // Convert Map to String representation
-                                .orElse("{}");
+                        String fnName = fc.name().orElse("unknown");
+                        String fnArgs = fc.args().map(Object::toString).orElse("{}");
 
                         toolRequests.add(ToolExecutionRequest.builder()
                                 .name(fnName)
@@ -332,11 +332,9 @@ public class GoogleGenAiChatModel implements ChatModel {
                     ? AiMessage.from(textBuilder.toString())
                     : AiMessage.from(toolRequests);
 
-            // 4. Safety Check: Usage Metadata (Handle Optional<UsageMetadata>)
+            // 3. Safety Check: Usage Metadata (Handle Optional)
             TokenUsage usage = response.usageMetadata()
                     .map(meta -> new TokenUsage(
-                            // These internal counts might also be Integers or Optionals.
-                            // This assumes they are Integers. If Optionals, add .orElse(0)
                             meta.promptTokenCount() != null ? meta.promptTokenCount() : 0,
                             meta.candidatesTokenCount() != null ? meta.candidatesTokenCount() : 0
                     ))
@@ -348,8 +346,11 @@ public class GoogleGenAiChatModel implements ChatModel {
                     .finishReason(FinishReason.STOP)
                     .build();
         }
+    }
 
-    // --- Builder ---
+    // =================================================================================================
+    // BUILDER
+    // =================================================================================================
     public static Builder builder() { return new Builder(); }
 
     public static class Builder {
