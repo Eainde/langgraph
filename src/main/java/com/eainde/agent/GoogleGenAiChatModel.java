@@ -1,7 +1,5 @@
 package com.example.langchain4j.google;
 
-package com.example.langchain4j.google;
-
 import com.google.auth.oauth2.GoogleCredentials;
 import com.google.genai.Client;
 import com.google.genai.types.*;
@@ -33,8 +31,8 @@ import static java.util.Collections.emptyList;
 import static java.util.Collections.singletonList;
 
 /**
- * Robust LangChain4j ChatModel for Google Gen AI SDK.
- * Handles Optional unwrapping and correct API access patterns.
+ * Robust LangChain4j ChatModel for the Google Gen AI SDK (com.google.genai).
+ * Supports explicit SafetySettings, Response Schema, and Response MimeType.
  */
 public class GoogleGenAiChatModel implements ChatModel {
 
@@ -47,7 +45,11 @@ public class GoogleGenAiChatModel implements ChatModel {
     private final Boolean logResponses;
     private final List<ChatModelListener> listeners;
     private final ChatRequestParameters defaultRequestParameters;
-    private final Map<String, String> safetySettings;
+
+    // Configurable Fields
+    private final List<SafetySetting> safetySettings;
+    private final Schema responseSchema;
+    private final String responseMimeType; // <--- NEW FIELD
     private final boolean googleSearchEnabled;
     private final List<String> allowedFunctionNames;
     private final ToolConfig toolConfig;
@@ -61,22 +63,17 @@ public class GoogleGenAiChatModel implements ChatModel {
         this.googleSearchEnabled = builder.googleSearch != null && builder.googleSearch;
         this.allowedFunctionNames = builder.allowedFunctionNames;
         this.toolConfig = builder.toolConfig;
+        this.responseSchema = builder.responseSchema;
+        this.responseMimeType = builder.responseMimeType; // <--- Store it
 
-        // Map Safety Settings
-        this.safetySettings = new HashMap<>();
-        if (builder.safetySettings != null) {
-            builder.safetySettings.forEach((k, v) -> this.safetySettings.put(k.toString(), v.toString()));
-        }
+        this.safetySettings = builder.safetySettings != null ? new ArrayList<>(builder.safetySettings) : new ArrayList<>();
 
         // Initialize Client
         if (builder.client != null) {
             this.client = builder.client;
         } else {
-            // Configure HttpOptions for Timeout
             HttpOptions.Builder httpOptions = HttpOptions.builder();
             if (builder.timeout != null) {
-                // Cast to int if your specific SDK version requires it, or use .toMillis() (long) if supported.
-                // Using (int) is safer for older generated clients.
                 httpOptions.timeout((int) builder.timeout.toMillis());
             }
 
@@ -93,7 +90,6 @@ public class GoogleGenAiChatModel implements ChatModel {
             this.client = clientBuilder.build();
         }
 
-        // Default Parameters
         this.defaultRequestParameters = DefaultChatRequestParameters.builder()
                 .temperature(builder.temperature)
                 .maxOutputTokens(builder.maxOutputTokens)
@@ -130,13 +126,28 @@ public class GoogleGenAiChatModel implements ChatModel {
         if (parameters.maxOutputTokens() != null) configBuilder.maxOutputTokens(parameters.maxOutputTokens());
         if (parameters.stopSequences() != null) configBuilder.stopSequences(parameters.stopSequences());
 
-        // Apply Safety Settings
-        if (!safetySettings.isEmpty()) {
-            List<SafetySetting> safetyList = new ArrayList<>();
-            safetySettings.forEach((cat, thresh) ->
-                    safetyList.add(SafetySetting.builder().category(cat).threshold(thresh).build())
-            );
-            configBuilder.safetySettings(safetyList);
+        // A. Apply Safety Settings
+        if (!this.safetySettings.isEmpty()) {
+            configBuilder.safetySettings(this.safetySettings);
+        }
+
+        // B. Apply Response MimeType (Default)
+        if (this.responseMimeType != null) {
+            configBuilder.responseMimeType(this.responseMimeType);
+        }
+
+        // C. Apply Response Schema
+        if (this.responseSchema != null) {
+            configBuilder.responseSchema(this.responseSchema);
+            // If schema is present, usually MIME type must be application/json
+            configBuilder.responseMimeType("application/json");
+        }
+
+        // D. Handle Standard LangChain4j ResponseFormat (Overrides custom MIME type if JSON is requested)
+        if (parameters.responseFormat() != null) {
+            if (parameters.responseFormat().type() == ResponseFormatType.JSON) {
+                configBuilder.responseMimeType("application/json");
+            }
         }
 
         // Apply System Instruction
@@ -146,20 +157,13 @@ public class GoogleGenAiChatModel implements ChatModel {
                     .build());
         }
 
-        // JSON Mode
-        if (parameters.responseFormat() != null && parameters.responseFormat().type() == ResponseFormatType.JSON) {
-            configBuilder.responseMimeType("application/json");
-        }
-
         // 3. Configure Tools
         List<Tool> requestTools = new ArrayList<>();
 
-        // A. Google Search
         if (this.googleSearchEnabled) {
             requestTools.add(Tool.builder().googleSearch(GoogleSearch.builder().build()).build());
         }
 
-        // B. Function Calling
         List<ToolSpecification> toolSpecs = parameters.toolSpecifications();
         if (!isNullOrEmpty(toolSpecs)) {
             List<FunctionDeclaration> decls = toolSpecs.stream()
@@ -168,19 +172,16 @@ public class GoogleGenAiChatModel implements ChatModel {
 
             requestTools.add(Tool.builder().functionDeclarations(decls).build());
 
-            // Handle ToolChoice
             FunctionCallingConfig.Builder funcConfig = FunctionCallingConfig.builder();
 
-            // Map LC4j ToolChoice to Google Mode
             if (parameters.toolChoice() == ToolChoice.REQUIRED) {
-                funcConfig.mode("ANY"); // Forces the model to use a tool
+                funcConfig.mode("ANY");
             } else if (parameters.toolChoice() == ToolChoice.NONE) {
                 funcConfig.mode("NONE");
             } else {
                 funcConfig.mode("AUTO");
             }
 
-            // Apply Allowed Function Names (Pre-configured)
             if (!isNullOrEmpty(this.allowedFunctionNames)) {
                 funcConfig.allowedFunctionNames(this.allowedFunctionNames);
             }
@@ -194,7 +195,7 @@ public class GoogleGenAiChatModel implements ChatModel {
             configBuilder.tools(requestTools);
         }
 
-        // 4. Execute Request
+        // 4. Execute
         if (logRequests) log.info("Google Request: model={}, msgCount={}", modelName, messages.size());
 
         GenerateContentResponse result = null;
@@ -202,7 +203,6 @@ public class GoogleGenAiChatModel implements ChatModel {
 
         for (int i = 0; i <= maxRetries; i++) {
             try {
-                // Access 'models' field directly
                 result = client.models.generateContent(modelName, contents, configBuilder.build());
                 break;
             } catch (Exception e) {
@@ -254,7 +254,7 @@ public class GoogleGenAiChatModel implements ChatModel {
                 }
                 if (aiMsg.toolExecutionRequests() != null) {
                     for (ToolExecutionRequest req : aiMsg.toolExecutionRequests()) {
-                        Map<String, Object> args = new HashMap<>(); // Placeholder for argument map
+                        Map<String, Object> args = new HashMap<>();
                         parts.add(Part.builder()
                                 .functionCall(FunctionCall.builder().name(req.name()).args(args).build())
                                 .build());
@@ -285,38 +285,29 @@ public class GoogleGenAiChatModel implements ChatModel {
         }
 
         static ChatResponse toChatResponse(GenerateContentResponse response) {
-            // 1. Safety Check: Candidates (Handle Optional<List>)
             List<Candidate> candidates = response.candidates().orElse(Collections.emptyList());
 
             if (candidates.isEmpty()) {
                 return ChatResponse.builder()
-                        .aiMessage(AiMessage.from("Empty response (blocked or no candidates)"))
+                        .aiMessage(AiMessage.from("Empty response"))
                         .tokenUsage(new TokenUsage(0, 0))
                         .finishReason(FinishReason.OTHER)
                         .build();
             }
 
             Candidate candidate = candidates.get(0);
+            Content content = candidate.content().orElse(null);
 
-            // 2. Safety Check: Content & Parts (Handle Optionals)
             StringBuilder textBuilder = new StringBuilder();
             List<ToolExecutionRequest> toolRequests = new ArrayList<>();
 
-            Content content = candidate.content().orElse(null);
-
             if (content != null) {
                 List<Part> parts = content.parts().orElse(Collections.emptyList());
-
                 for (Part part : parts) {
-                    // Extract Text
-                    if (part.text() != null) {
-                        textBuilder.append(part.text());
-                    }
+                    if (part.text() != null) textBuilder.append(part.text());
 
-                    // Extract Function Call (Handle nested Optionals)
                     if (part.functionCall().isPresent()) {
                         FunctionCall fc = part.functionCall().get();
-
                         String fnName = fc.name().orElse("unknown");
                         String fnArgs = fc.args().map(Object::toString).orElse("{}");
 
@@ -332,7 +323,6 @@ public class GoogleGenAiChatModel implements ChatModel {
                     ? AiMessage.from(textBuilder.toString())
                     : AiMessage.from(toolRequests);
 
-            // 3. Safety Check: Usage Metadata (Handle Optional)
             TokenUsage usage = response.usageMetadata()
                     .map(meta -> new TokenUsage(
                             meta.promptTokenCount() != null ? meta.promptTokenCount() : 0,
@@ -362,11 +352,17 @@ public class GoogleGenAiChatModel implements ChatModel {
         private List<String> stopSequences;
         private Duration timeout;
         private Boolean googleSearch, logRequests, logResponses;
-        private Map<HarmCategory, SafetyThreshold> safetySettings;
+
+        // Updated Fields
+        private List<SafetySetting> safetySettings;
+        private Schema responseSchema;
+        private String responseMimeType; // <--- NEW Field
+
         private List<String> allowedFunctionNames;
         private ToolConfig toolConfig;
         private List<ChatModelListener> listeners;
 
+        // Standard Setters
         public Builder client(Client client) { this.client = client; return this; }
         public Builder googleCredentials(GoogleCredentials credentials) { this.googleCredentials = credentials; return this; }
         public Builder apiKey(String apiKey) { this.apiKey = apiKey; return this; }
@@ -380,7 +376,15 @@ public class GoogleGenAiChatModel implements ChatModel {
         public Builder maxOutputTokens(Integer maxOutputTokens) { this.maxOutputTokens = maxOutputTokens; return this; }
         public Builder stopSequences(List<String> stopSequences) { this.stopSequences = stopSequences; return this; }
         public Builder maxRetries(Integer maxRetries) { this.maxRetries = maxRetries; return this; }
-        public Builder safetySettings(Map<HarmCategory, SafetyThreshold> safetySettings) { this.safetySettings = safetySettings; return this; }
+        public Builder safetySettings(List<SafetySetting> safetySettings) { this.safetySettings = safetySettings; return this; }
+        public Builder responseSchema(Schema responseSchema) { this.responseSchema = responseSchema; return this; }
+
+        // NEW METHOD
+        public Builder responseMimeType(String responseMimeType) {
+            this.responseMimeType = responseMimeType;
+            return this;
+        }
+
         public Builder enableGoogleSearch(boolean googleSearch) { this.googleSearch = googleSearch; return this; }
         public Builder toolConfig(ToolConfig toolConfig) { this.toolConfig = toolConfig; return this; }
         public Builder allowedFunctionNames(List<String> allowedFunctionNames) { this.allowedFunctionNames = allowedFunctionNames; return this; }
@@ -392,7 +396,4 @@ public class GoogleGenAiChatModel implements ChatModel {
             return new GoogleGenAiChatModel(this);
         }
     }
-
-    public enum HarmCategory { HARM_CATEGORY_HATE_SPEECH, HARM_CATEGORY_DANGEROUS_CONTENT, HARM_CATEGORY_HARASSMENT, HARM_CATEGORY_SEXUALLY_EXPLICIT }
-    public enum SafetyThreshold { BLOCK_NONE, BLOCK_ONLY_HIGH, BLOCK_MEDIUM_AND_ABOVE, BLOCK_LOW_AND_ABOVE }
 }
