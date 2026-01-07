@@ -16,7 +16,7 @@ import dev.langchain4j.model.chat.request.DefaultChatRequestParameters;
 import dev.langchain4j.model.chat.request.ResponseFormatType;
 import dev.langchain4j.model.chat.request.ToolChoice;
 import dev.langchain4j.model.chat.response.ChatResponse;
-import dev.langchain4j.model.output.FinishReason;
+import dev.langchain4j.modetool.output.FinishReason;
 import dev.langchain4j.model.output.TokenUsage;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -275,35 +275,44 @@ public class GoogleGenAiChatModel implements ChatModel {
         }
 
         static ChatResponse toChatResponse(GenerateContentResponse response) {
-            // FIXED: Safely access Optional usage metadata
-            TokenUsage usage = new TokenUsage(0, 0);
-            if (response.usageMetadata() != null) { // Assuming SDK returns Object or Optional
-                // If your SDK returns Optional, use .map() or .orElse()
-                // Here we assume standard bean access, but if Optional:
-                // usage = response.usageMetadata().map(m -> new TokenUsage(m.promptTokenCount(), m.candidatesTokenCount())).orElse(new TokenUsage(0,0));
-
-                // Using the unwrapped check based on your feedback:
-                usage = new TokenUsage(
-                        response.usageMetadata().promptTokenCount(),
-                        response.usageMetadata().candidatesTokenCount()
-                );
+            // 1. Safety Check: Candidates list
+            if (response.candidates() == null || response.candidates().isEmpty()) {
+                return ChatResponse.builder()
+                        .aiMessage(AiMessage.from("Empty response"))
+                        .tokenUsage(new TokenUsage(0, 0))
+                        .finishReason(FinishReason.OTHER)
+                        .build();
             }
+
+            Candidate candidate = response.candidates().get(0);
+            Content content = candidate.content().orElse(null);
 
             String text = "";
             List<ToolExecutionRequest> toolRequests = new ArrayList<>();
 
-            // FIXED: candidates().get(0) assumes List return.
-            Candidate candidate = response.candidates().get(0);
-            Content content = candidate.content();
-
-            // FIXED: Handle Content Optional and Parts Optional
             if (content != null && content.parts() != null) {
                 for (Part part : content.parts()) {
-                    if (part.text() != null) text += part.text();
-                    if (part.functionCall() != null) {
+                    // A. Extract Text safely
+                    if (part.text() != null) {
+                        text += part.text();
+                    }
+
+                    // B. Extract Function Call safely (handling nested Optionals)
+                    // Check if functionCall is present
+                    if (part.functionCall().isPresent()) {
+                        FunctionCall fc = part.functionCall().get();
+
+                        // Safely get the name (default to "unknown" if missing)
+                        String fnName = fc.name().orElse("unknown_function");
+
+                        // Safely get arguments (default to empty JSON object "{}" if missing)
+                        String fnArgs = fc.args()
+                                .map(args -> args.toString()) // Assuming args() returns Optional<Map> or similar
+                                .orElse("{}");
+
                         toolRequests.add(ToolExecutionRequest.builder()
-                                .name(part.functionCall().name())
-                                .arguments(part.functionCall().args().toString())
+                                .name(fnName)
+                                .arguments(fnArgs)
                                 .build());
                     }
                 }
@@ -311,13 +320,20 @@ public class GoogleGenAiChatModel implements ChatModel {
 
             AiMessage aiMessage = toolRequests.isEmpty() ? AiMessage.from(text) : AiMessage.from(toolRequests);
 
+            // 2. Safety Check: Usage Metadata
+            TokenUsage usage = response.usageMetadata()
+                    .map(meta -> new TokenUsage(
+                            meta.promptTokenCount() != null ? meta.promptTokenCount() : 0,
+                            meta.candidatesTokenCount() != null ? meta.candidatesTokenCount() : 0
+                    ))
+                    .orElse(new TokenUsage(0, 0));
+
             return ChatResponse.builder()
                     .aiMessage(aiMessage)
                     .tokenUsage(usage)
                     .finishReason(FinishReason.STOP)
                     .build();
         }
-    }
 
     // --- Builder ---
     public static Builder builder() { return new Builder(); }
