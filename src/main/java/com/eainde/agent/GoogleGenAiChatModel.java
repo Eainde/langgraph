@@ -275,39 +275,49 @@ public class GoogleGenAiChatModel implements ChatModel {
         }
 
         static ChatResponse toChatResponse(GenerateContentResponse response) {
-            // 1. Safety Check: Candidates list
-            if (response.candidates() == null || response.candidates().isEmpty()) {
+            // 1. Safety Check: Candidates (Handle Optional<List<Candidate>>)
+            // We safely unwrap the list, or use an empty list if missing.
+            List<Candidate> candidates = response.candidates().orElse(Collections.emptyList());
+
+            if (candidates.isEmpty()) {
                 return ChatResponse.builder()
-                        .aiMessage(AiMessage.from("Empty response"))
+                        .aiMessage(AiMessage.from("Empty response (blocked or no candidates)"))
                         .tokenUsage(new TokenUsage(0, 0))
                         .finishReason(FinishReason.OTHER)
                         .build();
             }
 
-            Candidate candidate = response.candidates().get(0);
+            Candidate candidate = candidates.get(0);
+
+            // 2. Safety Check: Content (Handle Optional<Content>)
             Content content = candidate.content().orElse(null);
 
-            String text = "";
+            StringBuilder textBuilder = new StringBuilder();
             List<ToolExecutionRequest> toolRequests = new ArrayList<>();
 
-            if (content != null && content.parts() != null) {
-                for (Part part : content.parts()) {
-                    // A. Extract Text safely
+            // 3. Safety Check: Parts (Handle Optional<List<Part>>)
+            if (content != null) {
+                // Safely unwrap the list of parts
+                List<Part> parts = content.parts().orElse(Collections.emptyList());
+
+                for (Part part : parts) {
+                    // A. Extract Text (some versions return String, some Optional<String>)
+                    // We assume text() returns String here based on standard patterns,
+                    // but if it's Optional, use: part.text().ifPresent(textBuilder::append);
                     if (part.text() != null) {
-                        text += part.text();
+                        textBuilder.append(part.text());
                     }
 
-                    // B. Extract Function Call safely (handling nested Optionals)
-                    // Check if functionCall is present
+                    // B. Extract Function Call (Handle Optional<FunctionCall>)
                     if (part.functionCall().isPresent()) {
                         FunctionCall fc = part.functionCall().get();
 
-                        // Safely get the name (default to "unknown" if missing)
-                        String fnName = fc.name().orElse("unknown_function");
+                        // C. Extract Name (Handle Optional<String>)
+                        String fnName = fc.name().orElse("unknown_tool");
 
-                        // Safely get arguments (default to empty JSON object "{}" if missing)
+                        // D. Extract Args (Handle Optional<Map<String, Object>>)
                         String fnArgs = fc.args()
-                                .map(args -> args.toString()) // Assuming args() returns Optional<Map> or similar
+                                .map(map -> map.toString()) // Convert Map to String representation
                                 .orElse("{}");
 
                         toolRequests.add(ToolExecutionRequest.builder()
@@ -318,11 +328,15 @@ public class GoogleGenAiChatModel implements ChatModel {
                 }
             }
 
-            AiMessage aiMessage = toolRequests.isEmpty() ? AiMessage.from(text) : AiMessage.from(toolRequests);
+            AiMessage aiMessage = toolRequests.isEmpty()
+                    ? AiMessage.from(textBuilder.toString())
+                    : AiMessage.from(toolRequests);
 
-            // 2. Safety Check: Usage Metadata
+            // 4. Safety Check: Usage Metadata (Handle Optional<UsageMetadata>)
             TokenUsage usage = response.usageMetadata()
                     .map(meta -> new TokenUsage(
+                            // These internal counts might also be Integers or Optionals.
+                            // This assumes they are Integers. If Optionals, add .orElse(0)
                             meta.promptTokenCount() != null ? meta.promptTokenCount() : 0,
                             meta.candidatesTokenCount() != null ? meta.candidatesTokenCount() : 0
                     ))
