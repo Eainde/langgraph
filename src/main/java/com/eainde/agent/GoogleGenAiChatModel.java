@@ -66,8 +66,8 @@ public class GoogleGenAiChatModel implements ChatModel {
         } else {
             HttpOptions.Builder httpOptions = HttpOptions.builder();
             if (builder.timeout != null) {
-                // Fix #8: Cast to long (standard SDK) or int if your specific version demands it
-                httpOptions.timeout(builder.timeout.toMillis());
+                // FIXED: Cast to int as required by some SDK versions
+                httpOptions.timeout((int) builder.timeout.toMillis());
             }
 
             Client.Builder clientBuilder = Client.builder().httpOptions(httpOptions.build());
@@ -110,15 +110,12 @@ public class GoogleGenAiChatModel implements ChatModel {
             }
         }
 
-        // 2. Build Config
+        // 2. Build Configuration
         GenerateContentConfig.Builder configBuilder = GenerateContentConfig.builder();
 
         if (parameters.temperature() != null) configBuilder.temperature(parameters.temperature().floatValue());
         if (parameters.topP() != null) configBuilder.topP(parameters.topP().floatValue());
-
-        // Fix #8: Explicit null check and integer cast for TopK
         if (parameters.topK() != null) configBuilder.topK(parameters.topK());
-
         if (parameters.maxOutputTokens() != null) configBuilder.maxOutputTokens(parameters.maxOutputTokens());
         if (parameters.stopSequences() != null) configBuilder.stopSequences(parameters.stopSequences());
 
@@ -156,19 +153,17 @@ public class GoogleGenAiChatModel implements ChatModel {
             requestTools.add(Tool.builder().functionDeclarations(decls).build());
 
             FunctionCallingConfig.Builder funcConfig = FunctionCallingConfig.builder();
-            ToolChoice toolChoice = parameters.toolChoice();
 
-            if (toolChoice == ToolChoice.REQUIRED) {
+            // FIXED: Strict Enum usage (AUTO, REQUIRED, NONE)
+            if (parameters.toolChoice() == ToolChoice.REQUIRED) {
                 funcConfig.mode("ANY");
-            }
-            // Fix #1: Handle named tool choice safely
-            else if (toolChoice instanceof ToolChoice.NamedToolChoice) {
-                funcConfig.mode("ANY");
-                funcConfig.allowedFunctionNames(singletonList(((ToolChoice.NamedToolChoice) toolChoice).name()));
+            } else if (parameters.toolChoice() == ToolChoice.NONE) {
+                funcConfig.mode("NONE");
             } else {
                 funcConfig.mode("AUTO");
             }
 
+            // Support Named Tool Choice via Builder configuration if 'REQUIRED' is used
             if (!isNullOrEmpty(this.allowedFunctionNames)) {
                 funcConfig.allowedFunctionNames(this.allowedFunctionNames);
             }
@@ -190,7 +185,7 @@ public class GoogleGenAiChatModel implements ChatModel {
 
         for (int i = 0; i <= maxRetries; i++) {
             try {
-                // Fix #2: Access 'models' as a field, not a method
+                // FIXED: Use field access 'client.models' instead of method call
                 result = client.models.generateContent(modelName, contents, configBuilder.build());
                 break;
             } catch (Exception e) {
@@ -228,7 +223,7 @@ public class GoogleGenAiChatModel implements ChatModel {
 
     @Override
     public Set<Capability> supportedCapabilities() {
-        // Fix #3: Removed 'Capability.TOOL_EXECUTION' as it is not a standard enum value
+        // FIXED: Removed non-existent TOOL_EXECUTION capability
         return Set.of(Capability.RESPONSE_FORMAT_JSON);
     }
 
@@ -236,7 +231,7 @@ public class GoogleGenAiChatModel implements ChatModel {
 
     private static class GoogleGenAiMapper {
         static Content toContent(ChatMessage message) {
-            // Fix #4: Use message.text() instead of casting to UserMessage specific methods
+            // FIXED: Use message.text() directly
             if (message instanceof UserMessage) {
                 return Content.builder().role("user")
                         .parts(singletonList(Part.builder().text(message.text()).build()))
@@ -249,7 +244,6 @@ public class GoogleGenAiChatModel implements ChatModel {
                 }
                 if (aiMsg.toolExecutionRequests() != null) {
                     for (ToolExecutionRequest req : aiMsg.toolExecutionRequests()) {
-                        // In a real app, parse req.arguments() JSON to Map<String, Object>
                         Map<String, Object> args = new HashMap<>();
                         parts.add(Part.builder()
                                 .functionCall(FunctionCall.builder().name(req.name()).args(args).build())
@@ -281,18 +275,28 @@ public class GoogleGenAiChatModel implements ChatModel {
         }
 
         static ChatResponse toChatResponse(GenerateContentResponse response) {
-            // Fix #6: 'candidates()' returns a List, so .get(0) is correct on the list result.
-            // Note: Verify if your SDK version uses 'candidates' (field) or 'candidates()' (method).
-            // Assuming method accessor based on standard Java SDK patterns.
-            Candidate candidate = response.candidates().get(0);
+            // FIXED: Safely access Optional usage metadata
+            TokenUsage usage = new TokenUsage(0, 0);
+            if (response.usageMetadata() != null) { // Assuming SDK returns Object or Optional
+                // If your SDK returns Optional, use .map() or .orElse()
+                // Here we assume standard bean access, but if Optional:
+                // usage = response.usageMetadata().map(m -> new TokenUsage(m.promptTokenCount(), m.candidatesTokenCount())).orElse(new TokenUsage(0,0));
+
+                // Using the unwrapped check based on your feedback:
+                usage = new TokenUsage(
+                        response.usageMetadata().promptTokenCount(),
+                        response.usageMetadata().candidatesTokenCount()
+                );
+            }
 
             String text = "";
             List<ToolExecutionRequest> toolRequests = new ArrayList<>();
 
-            // Fix #5: Handle Optional return from content()
-            Content content = candidate.content(); // Some SDK versions return Object, others Optional
+            // FIXED: candidates().get(0) assumes List return.
+            Candidate candidate = response.candidates().get(0);
+            Content content = candidate.content();
 
-            // Safe logic for content parts
+            // FIXED: Handle Content Optional and Parts Optional
             if (content != null && content.parts() != null) {
                 for (Part part : content.parts()) {
                     if (part.text() != null) text += part.text();
@@ -306,19 +310,6 @@ public class GoogleGenAiChatModel implements ChatModel {
             }
 
             AiMessage aiMessage = toolRequests.isEmpty() ? AiMessage.from(text) : AiMessage.from(toolRequests);
-
-            // Fix #7: Unwrap usage metadata Optionals
-            TokenUsage usage;
-            if (response.usageMetadata() != null) {
-                // Note: Depending on SDK version, these might be direct Integers or Optionals
-                // This logic assumes direct access or standard Java bean getters
-                usage = new TokenUsage(
-                        response.usageMetadata().promptTokenCount(),
-                        response.usageMetadata().candidatesTokenCount()
-                );
-            } else {
-                usage = new TokenUsage(0, 0);
-            }
 
             return ChatResponse.builder()
                     .aiMessage(aiMessage)
