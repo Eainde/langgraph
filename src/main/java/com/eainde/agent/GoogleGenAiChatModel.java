@@ -32,7 +32,6 @@ import static java.util.Collections.singletonList;
 
 /**
  * Robust LangChain4j ChatModel for the Google Gen AI SDK (com.google.genai).
- * Supports explicit SafetySettings, Response Schema, and Response MimeType.
  */
 public class GoogleGenAiChatModel implements ChatModel {
 
@@ -49,7 +48,8 @@ public class GoogleGenAiChatModel implements ChatModel {
     // Configurable Fields
     private final List<SafetySetting> safetySettings;
     private final Schema responseSchema;
-    private final String responseMimeType; // <--- NEW FIELD
+    private final Integer thinkingBudget;
+    private final String responseMimeType;
     private final boolean googleSearchEnabled;
     private final List<String> allowedFunctionNames;
     private final ToolConfig toolConfig;
@@ -64,7 +64,8 @@ public class GoogleGenAiChatModel implements ChatModel {
         this.allowedFunctionNames = builder.allowedFunctionNames;
         this.toolConfig = builder.toolConfig;
         this.responseSchema = builder.responseSchema;
-        this.responseMimeType = builder.responseMimeType; // <--- Store it
+        this.responseMimeType = builder.responseMimeType;
+        this.thinkingBudget= builder.thinkingBudget;
 
         this.safetySettings = builder.safetySettings != null ? new ArrayList<>(builder.safetySettings) : new ArrayList<>();
 
@@ -126,38 +127,36 @@ public class GoogleGenAiChatModel implements ChatModel {
         if (parameters.maxOutputTokens() != null) configBuilder.maxOutputTokens(parameters.maxOutputTokens());
         if (parameters.stopSequences() != null) configBuilder.stopSequences(parameters.stopSequences());
 
-        // A. Apply Safety Settings
         if (!this.safetySettings.isEmpty()) {
             configBuilder.safetySettings(this.safetySettings);
         }
 
-        // B. Apply Response MimeType (Default)
         if (this.responseMimeType != null) {
             configBuilder.responseMimeType(this.responseMimeType);
         }
 
-        // C. Apply Response Schema
         if (this.responseSchema != null) {
             configBuilder.responseSchema(this.responseSchema);
             // If schema is present, usually MIME type must be application/json
             configBuilder.responseMimeType("application/json");
         }
 
-        // D. Handle Standard LangChain4j ResponseFormat (Overrides custom MIME type if JSON is requested)
+        if (this.thinkingBudget != null) {
+            configBuilder.thinkingConfig(ThinkingConfig.builder().thinkingBudget(thinkingBudget).build());
+        }
+
         if (parameters.responseFormat() != null) {
             if (parameters.responseFormat().type() == ResponseFormatType.JSON) {
                 configBuilder.responseMimeType("application/json");
             }
         }
 
-        // Apply System Instruction
         if (systemInstruction.length() > 0) {
             configBuilder.systemInstruction(Content.builder()
                     .parts(singletonList(Part.builder().text(systemInstruction.toString()).build()))
                     .build());
         }
 
-        // 3. Configure Tools
         List<Tool> requestTools = new ArrayList<>();
 
         if (this.googleSearchEnabled) {
@@ -195,7 +194,6 @@ public class GoogleGenAiChatModel implements ChatModel {
             configBuilder.tools(requestTools);
         }
 
-        // 4. Execute
         if (logRequests) log.info("Google Request: model={}, msgCount={}", modelName, messages.size());
 
         GenerateContentResponse result = null;
@@ -223,7 +221,6 @@ public class GoogleGenAiChatModel implements ChatModel {
         return chatResponse;
     }
 
-    // --- Standard Interface Methods ---
     @Override
     public ChatRequestParameters defaultRequestParameters() { return defaultRequestParameters; }
 
@@ -236,9 +233,7 @@ public class GoogleGenAiChatModel implements ChatModel {
     @Override
     public Set<Capability> supportedCapabilities() { return Set.of(Capability.RESPONSE_FORMAT_JSON); }
 
-    // =================================================================================================
-    // ROBUST MAPPER
-    // =================================================================================================
+
     private static class GoogleGenAiMapper {
 
         static Content toContent(ChatMessage message) {
@@ -338,9 +333,7 @@ public class GoogleGenAiChatModel implements ChatModel {
         }
     }
 
-    // =================================================================================================
-    // BUILDER
-    // =================================================================================================
+
     public static Builder builder() { return new Builder(); }
 
     public static class Builder {
@@ -348,21 +341,19 @@ public class GoogleGenAiChatModel implements ChatModel {
         private GoogleCredentials googleCredentials;
         private String apiKey, projectId, location, modelName;
         private Double temperature, topP;
-        private Integer topK, maxOutputTokens, maxRetries = 3;
+        private Integer topK, maxOutputTokens, thinkingBudget, maxRetries = 3;
         private List<String> stopSequences;
         private Duration timeout;
         private Boolean googleSearch, logRequests, logResponses;
 
-        // Updated Fields
         private List<SafetySetting> safetySettings;
         private Schema responseSchema;
-        private String responseMimeType; // <--- NEW Field
+        private String responseMimeType;
 
         private List<String> allowedFunctionNames;
         private ToolConfig toolConfig;
         private List<ChatModelListener> listeners;
 
-        // Standard Setters
         public Builder client(Client client) { this.client = client; return this; }
         public Builder googleCredentials(GoogleCredentials credentials) { this.googleCredentials = credentials; return this; }
         public Builder apiKey(String apiKey) { this.apiKey = apiKey; return this; }
@@ -374,12 +365,12 @@ public class GoogleGenAiChatModel implements ChatModel {
         public Builder topP(Double topP) { this.topP = topP; return this; }
         public Builder topK(Integer topK) { this.topK = topK; return this; }
         public Builder maxOutputTokens(Integer maxOutputTokens) { this.maxOutputTokens = maxOutputTokens; return this; }
+        public Builder thinkingBudget(Integer maxOutputTokens) { this.thinkingBudget = thinkingBudget; return this; }
         public Builder stopSequences(List<String> stopSequences) { this.stopSequences = stopSequences; return this; }
         public Builder maxRetries(Integer maxRetries) { this.maxRetries = maxRetries; return this; }
         public Builder safetySettings(List<SafetySetting> safetySettings) { this.safetySettings = safetySettings; return this; }
         public Builder responseSchema(Schema responseSchema) { this.responseSchema = responseSchema; return this; }
 
-        // NEW METHOD
         public Builder responseMimeType(String responseMimeType) {
             this.responseMimeType = responseMimeType;
             return this;
