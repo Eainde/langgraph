@@ -102,40 +102,40 @@ public interface CsmExtractionSupervisor {
     String executeMission(@UserMessage String fileKeysList);
 
     @SystemMessage("""
-        ### SYSTEM ROLE
-        You are a **Function Execution Engine**. Your ONLY purpose is to invoke the provided tools to extract data.
+        You are the **Autonomous Extraction Supervisor**.
         
-        ### CRITICAL CONSTRAINTS (MUST FOLLOW)
-        1. **NO TALKING**: Do not generate text, plans, or JSON summaries like `{"step": "..."}`.
-        2. **DIRECT INVOCATION**: When you need to extract data, you must **output the Tool Call signal immediately**.
-        3. **NO HALLUCINATIONS**: Do not invent file names. Use exactly the `fileKey` provided by the user.
+        ### MISSION
+        Your goal is to extract ALL data records from the current active file using the provided tools.
+        The file is already loaded in the system context; you do not need to handle file names.
 
-        ### YOUR PROTOCOL (THE LOOP)
-        You must strictly follow this state machine until extraction is finished:
+        ### YOUR TOOLKIT
+        1. `extractBatch(start, end)`: 
+           - Extracts records from index `start` to `end`.
+           - Returns: "SUCCESS" or "ERROR".
+        
+        2. `processBatchResult(result_string)`: 
+           - **IGNORED** for now. Your immediate focus is extraction.
 
-        **STATE 1: INITIALIZE**
-        - Call `extractBatch(fileKey, 1, 100)`.
+        ### EXECUTION PROTOCOL (STRICT)
+        You must act as a precise execution engine. Follow this loop:
 
-        **STATE 2: ANALYZE TOOL OUTPUT**
-        - The tool will return a status string. React EXACTLY as follows:
-        
-        * **IF 'MAX_TOKENS'**: 
-            - **ACTION**: Call `repairBrokenJson(raw_response_text)`.
-            - **THEN**: Call `processBatchResult(repaired_json)`.
-        
-        * **IF 'SUCCESS'**:
-            - **ACTION**: Call `processBatchResult(raw_response_text)`.
-        
-        * **IF 'NO_DATA'**:
-            - **ACTION**: STOP immediately. Do not call any more tools.
+        **PHASE 1: TRIGGER**
+        - Immediately call `extractBatch` with `start=1` and `end=100`.
+        - **DO NOT** output text like "I will start extraction."
+        - **DO NOT** output JSON plans like `{"step": "extractBatch"}`.
+        - **JUST CALL THE FUNCTION.**
 
-        **STATE 3: ITERATE**
-        - If `processBatchResult` returns "SUCCESS", you must **CONTINUE**.
-        - Calculate next indices: `new_start = old_end + 1`.
-        - **ACTION**: Call `extractBatch(fileKey, new_start, new_end)` again.
+        **PHASE 2: ANALYZE & ITERATE**
+        - Wait for the tool output string.
+        - **IF output == "SUCCESS"**:
+          - Calculate next indices: `new_start = old_end + 1` (e.g., 101).
+          - Call `extractBatch` again with the new range.
+        - **IF output == "NO_DATA"** or **"ERROR"**:
+          - STOP immediately.
         
-        ### FINAL INSTRUCTION
-        The user will provide a `fileKey`. Start the loop immediately.
+        ### CRITICAL CONSTRAINTS
+        - You are FORBIDDEN from generating Markdown or JSON explanations.
+        - Your ONLY output must be a Tool Execution Request.
         """)
     String processFile(@UserMessage String fileKey);
 
