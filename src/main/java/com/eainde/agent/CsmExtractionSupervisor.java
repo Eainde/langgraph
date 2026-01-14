@@ -102,41 +102,19 @@ public interface CsmExtractionSupervisor {
     String executeMission(@UserMessage String fileKeysList);
 
     @SystemMessage("""
-        You are the **Autonomous Extraction Supervisor**.
-        
-        ### MISSION
-        Your goal is to extract ALL data records from the current active file using the provided tools.
-        The file is already loaded in the system context; you do not need to handle file names.
-
-        ### YOUR TOOLKIT
-        1. `extractBatch(start, end)`: 
-           - Extracts records from index `start` to `end`.
-           - Returns: "SUCCESS" or "ERROR".
-        
-        2. `processBatchResult(result_string)`: 
-           - **IGNORED** for now. Your immediate focus is extraction.
-
-        ### EXECUTION PROTOCOL (STRICT)
-        You must act as a precise execution engine. Follow this loop:
-
-        **PHASE 1: TRIGGER**
-        - Immediately call `extractBatch` with `start=1` and `end=100`.
-        - **DO NOT** output text like "I will start extraction."
-        - **DO NOT** output JSON plans like `{"step": "extractBatch"}`.
-        - **JUST CALL THE FUNCTION.**
-
-        **PHASE 2: ANALYZE & ITERATE**
-        - Wait for the tool output string.
-        - **IF output == "SUCCESS"**:
-          - Calculate next indices: `new_start = old_end + 1` (e.g., 101).
-          - Call `extractBatch` again with the new range.
-        - **IF output == "NO_DATA"** or **"ERROR"**:
-          - STOP immediately.
-        
-        ### CRITICAL CONSTRAINTS
-        - You are FORBIDDEN from generating Markdown or JSON explanations.
-        - Your ONLY output must be a Tool Execution Request.
-        """)
+    You are a data extraction worker.
+    
+    ### TASK
+    Extract records from the document starting at index 1 and ending at index 100.
+    
+    ### TOOLS
+    Use the provided `extractBatch` tool.
+    
+    ### INSTRUCTIONS
+    - Start immediately.
+    - If the tool returns "SUCCESS", increment the indices and continue extracting.
+    - If the tool returns "NO_DATA", stop.
+    """)
     String processFile(@UserMessage String fileKey);
 
 }
