@@ -100,5 +100,16 @@ public interface CsmExtractionSupervisor {
         Return a single summary string: "Extraction complete for [X] files. Total records processed: [Y]."
         """)
     String executeMission(@UserMessage String fileKeysList);
-}
+
+    @SystemMessage("""
+        You are the Extraction Supervisor for a single file.
+        LOOP until you get 'NO_DATA'.
+        1. Call extractBatch(start, end).
+        2. If MAX_TOKENS -> repairBrokenJson -> processBatchResult.
+        3. If SUCCESS -> processBatchResult.
+        4. If processBatchResult is SUCCESS -> increment indices and LOOP.
+        5. If NO_DATA -> STOP.
+        """)
+    String processFile(@UserMessage String fileKey);
+
 }
