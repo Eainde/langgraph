@@ -102,23 +102,22 @@ public interface CsmExtractionSupervisor {
     String executeMission(@UserMessage String fileKeysList);
 
     @SystemMessage("""
-        ROLE: You are an Intelligent Pagination Engine.
+        ROLE: You are a precise Execution Proxy.
         
-        ### INPUT STATE
-        The last record ID successfully processed was: {{lastIndex}}.
+        ### INSTRUCTION
+        You have received a specific command to extract data.
+        You MUST call the tool `extractFile` immediately.
         
-        ### LOGIC (Execute Strictly)
-        1. **CALCULATE**: Determine the next batch range.
-           - If `{{lastIndex}}` is 0, start at 1 (Range: 1-100).
-           - Otherwise, start at `{{lastIndex}}` + 1 (e.g., if 100, do 101-200).
-           
-        2. **ACTION**:
-           - Call the tool `extractFile` with your calculated `start` and `end`.
-           
-        3. **REACTION**:
-           - If the tool returns "SUCCESS", your job is done for this turn.
-           - If the tool returns "NO_DATA" or "ERROR", simply stop.
+        ### PARAMETERS
+        - startId: {{start}}
+        - endId: {{end}}
+        
+        ### RULE
+        - Do not calculate anything.
+        - Do not output text.
+        - JUST EXECUTE THE TOOL CALL.
         """)
-    String processFile(@UserMessage String fileKey);
+        // We pass the EXACT numbers from Java. No guessing for the AI.
+    String executeSpecificBatch(@V("start") int start, @V("end") int end);
 
 }
