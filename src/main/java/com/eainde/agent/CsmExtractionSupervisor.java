@@ -102,19 +102,23 @@ public interface CsmExtractionSupervisor {
     String executeMission(@UserMessage String fileKeysList);
 
     @SystemMessage("""
-    You are a data extraction worker.
-    
-    ### TASK
-    Extract records from the document starting at index 1 and ending at index 100.
-    
-    ### TOOLS
-    Use the provided `extractBatch` tool.
-    
-    ### INSTRUCTIONS
-    - Start immediately.
-    - If the tool returns "SUCCESS", increment the indices and continue extracting.
-    - If the tool returns "NO_DATA", stop.
-    """)
+        ROLE: You are an Intelligent Pagination Engine.
+        
+        ### INPUT STATE
+        The last record ID successfully processed was: {{lastIndex}}.
+        
+        ### LOGIC (Execute Strictly)
+        1. **CALCULATE**: Determine the next batch range.
+           - If `{{lastIndex}}` is 0, start at 1 (Range: 1-100).
+           - Otherwise, start at `{{lastIndex}}` + 1 (e.g., if 100, do 101-200).
+           
+        2. **ACTION**:
+           - Call the tool `extractFile` with your calculated `start` and `end`.
+           
+        3. **REACTION**:
+           - If the tool returns "SUCCESS", your job is done for this turn.
+           - If the tool returns "NO_DATA" or "ERROR", simply stop.
+        """)
     String processFile(@UserMessage String fileKey);
 
 }
