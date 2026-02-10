@@ -26,6 +26,54 @@ import static com.db.clm.kyc.ai.constants.ErrorMessages.NO_DOCUMENTS_FOR_EXTRACT
 import static com.db.clm.kyc.ai.constants.ErrorMessages.NO_MEDIA_RESOURCES_FOR_EXTRACTION;
 
 /**
+ * Per-file sequential workflow (4 agents):
+ *
+ *  sourceText
+ *     │
+ *     ▼
+ *  ┌─────────────────────────────┐
+ *  │  1. CsmSourceValidatorAgent │  → "sourceValidation"
+ *  └─────────────┬───────────────┘
+ *                │
+ *                ▼
+ *  ┌─────────────────────────────┐
+ *  │  2. EntityExtractorAgent    │  → "candidates"
+ *  └─────────────┬───────────────┘
+ *                │
+ *                ▼
+ *  ┌─────────────────────────────┐
+ *  │  3. LogicalAnalystAgent     │  → "scoredCandidates"
+ *  └─────────────┬───────────────┘
+ *                │
+ *                ▼
+ *  ┌─────────────────────────────┐
+ *  │  4. QualityAuditorAgent     │  → "qaReport"
+ *  └─────────────────────────────┘
+ *
+ *  This runs once per file. Results are collected by CsmExtractionService.
+ */
+
+/**
+ * Consolidation agent: merges all per-file QA reports into a
+ * single unified, de-duplicated CSM list with consensus scoring.
+ *
+ *  ┌──────────┐  ┌──────────┐  ┌──────────┐
+ *  │ File 1   │  │ File 2   │  │ File N   │
+ *  │ qaReport │  │ qaReport │  │ qaReport │
+ *  └────┬─────┘  └────┬─────┘  └────┬─────┘
+ *       │             │             │
+ *       └─────────────┼─────────────┘
+ *                     ▼
+ *       ┌─────────────────────────────┐
+ *       │  CsmConsolidationAgent      │
+ *       │  (cross-file de-dup &       │
+ *       │   consensus scoring)        │
+ *       └─────────────┬───────────────┘
+ *                     ▼
+ *            consolidatedReport
+ */
+
+/**
  * Service that processes multiple files through the CSM Extraction Sequential Workflow.
  *
  * For each FileRecord:
