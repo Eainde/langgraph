@@ -1,5 +1,3 @@
-package com.eainde.agent;
-
 package com.db.clm.kyc.ai.config;
 
 import com.db.clm.kyc.ai.agents.CsmConsolidationWorkflow;
@@ -13,21 +11,53 @@ import org.slf4j.LoggerFactory;
 import org.springframework.context.annotation.Configuration;
 
 /**
- * Defines and assembles the CSM extraction pipeline.
+ * CSM extraction pipeline with a critic-validator loop around entity extraction.
  *
- * Each agent is declared as an AgentSpec (metadata only — prompts come from DB).
- * The AgentFactory handles all the build mechanics.
+ * FLOW:
  *
- * CURRENT PIPELINE (simple sequence):
- *   sourceText → [Validate] → [Extract] → [Score] → [Audit] → qaReport
- *
- * TO ADD A CRITIC-VALIDATOR LOOP, simply compose with agentFactory.loop().
- * See the commented example at the bottom.
+ *   sourceText
+ *     │
+ *     ▼
+ *   ┌──────────────────────────────┐
+ *   │  1. csm-source-validator     │  → "sourceValidation"
+ *   └──────────────┬───────────────┘
+ *                  │
+ *                  ▼
+ *   ┌──────────────────────────────────────────────────────┐
+ *   │  2. ENTITY EXTRACTION LOOP (max 3 iterations)       │
+ *   │  ┌────────────────────────────┐                      │
+ *   │  │  entity-extractor          │ → "candidates"       │
+ *   │  │  (reads: sourceText,       │                      │
+ *   │  │   extractionReview if any) │                      │
+ *   │  └────────────┬───────────────┘                      │
+ *   │               │                                      │
+ *   │               ▼                                      │
+ *   │  ┌────────────────────────────┐                      │
+ *   │  │  entity-extraction-critic  │ → "extractionReview" │
+ *   │  │  (reads: candidates,       │                      │
+ *   │  │   sourceText)              │                      │
+ *   │  └────────────────────────────┘                      │
+ *   │       ↑                                              │
+ *   │       └──── loop if extractionScore < 0.8 ──────────│
+ *   └──────────────────────────────────────────────────────┘
+ *                  │
+ *                  ▼
+ *   ┌──────────────────────────────┐
+ *   │  3. logical-analyst          │  → "scoredCandidates"
+ *   └──────────────┬───────────────┘
+ *                  │
+ *                  ▼
+ *   ┌──────────────────────────────┐
+ *   │  4. quality-auditor          │  → "qaReport"
+ *   └──────────────────────────────┘
  */
 @Configuration
 public class CsmWorkflowConfig {
 
     private static final Logger log = LoggerFactory.getLogger(CsmWorkflowConfig.class);
+
+    private static final int    EXTRACTION_LOOP_MAX_ITERATIONS = 3;
+    private static final double EXTRACTION_QUALITY_THRESHOLD   = 0.8;
 
     private final AgentFactory agentFactory;
     private final WorkflowHolder workflowHolder;
@@ -38,7 +68,7 @@ public class CsmWorkflowConfig {
     }
 
     // =========================================================================
-    //  Agent Specs — declarative, no prompts, no boilerplate
+    //  Agent Specs
     // =========================================================================
 
     private static final AgentSpec SOURCE_VALIDATOR = AgentSpec
@@ -49,8 +79,14 @@ public class CsmWorkflowConfig {
 
     private static final AgentSpec ENTITY_EXTRACTOR = AgentSpec
             .of(AgentNames.ENTITY_EXTRACTOR, "Extracts CSM candidates from the source file")
-            .inputs("sourceText")
+            .inputs("sourceText", "extractionReview")
             .outputKey("candidates")
+            .build();
+
+    private static final AgentSpec ENTITY_EXTRACTION_CRITIC = AgentSpec
+            .of(AgentNames.ENTITY_EXTRACTION_CRITIC, "Reviews extraction quality and provides feedback")
+            .inputs("candidates", "sourceText")
+            .outputKey("extractionReview")
             .build();
 
     private static final AgentSpec LOGICAL_ANALYST = AgentSpec
@@ -80,10 +116,6 @@ public class CsmWorkflowConfig {
         buildAndRegisterWorkflows();
     }
 
-    /**
-     * Builds all workflows from specs and registers in the holder.
-     * Called at startup and on prompt refresh.
-     */
     public void buildAndRegisterWorkflows() {
         log.info("Building CSM workflows from agent specs...");
 
@@ -94,16 +126,32 @@ public class CsmWorkflowConfig {
     }
 
     private CsmExtractionWorkflow buildExtractionWorkflow() {
-        // Build individual agents from specs
-        UntypedAgent[] agents = agentFactory.createAll(
-                SOURCE_VALIDATOR,
-                ENTITY_EXTRACTOR,
-                LOGICAL_ANALYST,
-                QUALITY_AUDITOR
+
+        // Agent 1: Source Validator (straight-through)
+        UntypedAgent sourceValidator = agentFactory.create(SOURCE_VALIDATOR);
+
+        // Agent 2: Entity Extraction Loop (critic-validator pattern)
+        //   - Extractor produces candidates
+        //   - Critic reviews and scores them
+        //   - If score < threshold, Extractor refines using critic's feedback
+        //   - Loop exits when quality is met or max iterations reached
+        UntypedAgent extractionLoop = agentFactory.loopAtEnd(
+                EXTRACTION_LOOP_MAX_ITERATIONS,
+                scope -> parseExtractionScore(scope.readState("extractionReview", "")) >= EXTRACTION_QUALITY_THRESHOLD,
+                ENTITY_EXTRACTOR, ENTITY_EXTRACTION_CRITIC
         );
 
+        // Agent 3: Logical Analyst (straight-through)
+        UntypedAgent logicalAnalyst = agentFactory.create(LOGICAL_ANALYST);
+
+        // Agent 4: Quality Auditor (straight-through)
+        UntypedAgent qualityAuditor = agentFactory.create(QUALITY_AUDITOR);
+
         // Wire into typed sequential workflow
-        return agentFactory.sequence(CsmExtractionWorkflow.class, "qaReport", agents);
+        return agentFactory.sequence(
+                CsmExtractionWorkflow.class, "qaReport",
+                sourceValidator, extractionLoop, logicalAnalyst, qualityAuditor
+        );
     }
 
     private CsmConsolidationWorkflow buildConsolidationWorkflow() {
@@ -117,37 +165,43 @@ public class CsmWorkflowConfig {
     }
 
     // =========================================================================
-    //  EXAMPLE: How to add a critic-validator loop
+    //  Helpers
     // =========================================================================
-    //
-    //  Say you want the LogicalAnalyst to be reviewed by a critic,
-    //  and loop until the score is good enough:
-    //
-    //  private static final AgentSpec SCORING_CRITIC = AgentSpec
-    //          .of("scoring-critic", "Reviews scoring quality")
-    //          .inputs("scoredCandidates")
-    //          .outputKey("scoringQuality")
-    //          .build();
-    //
-    //  Then in buildExtractionWorkflow():
-    //
-    //      UntypedAgent sourceValidator = agentFactory.create(SOURCE_VALIDATOR);
-    //      UntypedAgent entityExtractor = agentFactory.create(ENTITY_EXTRACTOR);
-    //
-    //      // Loop: critic evaluates → analyst refines, until quality >= 0.8
-    //      UntypedAgent scoringLoop = agentFactory.loop(
-    //              5,  // max iterations
-    //              scope -> scope.readState("scoringQuality", 0.0) >= 0.8,
-    //              SCORING_CRITIC, LOGICAL_ANALYST
-    //      );
-    //
-    //      UntypedAgent qualityAuditor = agentFactory.create(QUALITY_AUDITOR);
-    //
-    //      return agentFactory.sequence(
-    //              CsmExtractionWorkflow.class, "qaReport",
-    //              sourceValidator, entityExtractor, scoringLoop, qualityAuditor
-    //      );
-    //
-    //  That's it. The loop is just another agent in the sequence.
-    //  Add the "scoring-critic" prompt to the DB and you're done.
+
+    /**
+     * Parses the extraction_score from the critic's JSON review output.
+     * The critic returns JSON like: { "extraction_score": 0.85, "feedback": "..." }
+     * We do a lightweight parse to avoid adding a JSON library dependency here.
+     */
+    private static double parseExtractionScore(String extractionReview) {
+        if (extractionReview == null || extractionReview.isBlank()) {
+            return 0.0;
+        }
+        try {
+            // Look for "extraction_score": <number> in the JSON
+            String key = "\"extraction_score\"";
+            int idx = extractionReview.indexOf(key);
+            if (idx == -1) {
+                return 0.0;
+            }
+            int colonIdx = extractionReview.indexOf(':', idx + key.length());
+            if (colonIdx == -1) {
+                return 0.0;
+            }
+            // Extract the number after the colon
+            StringBuilder sb = new StringBuilder();
+            for (int i = colonIdx + 1; i < extractionReview.length(); i++) {
+                char c = extractionReview.charAt(i);
+                if (Character.isDigit(c) || c == '.') {
+                    sb.append(c);
+                } else if (!Character.isWhitespace(c) && sb.length() > 0) {
+                    break;
+                }
+            }
+            return sb.length() > 0 ? Double.parseDouble(sb.toString()) : 0.0;
+        } catch (NumberFormatException e) {
+            log.warn("Failed to parse extraction_score from review: {}", extractionReview);
+            return 0.0;
+        }
+    }
 }
