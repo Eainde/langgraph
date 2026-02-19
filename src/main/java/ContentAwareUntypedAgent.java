@@ -1,4 +1,4 @@
-package ai.nexus.agent;
+package com.db.clm.kyc.ai.nexus.agent;
 
 import dev.langchain4j.data.message.*;
 import dev.langchain4j.model.chat.ChatLanguageModel;
@@ -8,10 +8,11 @@ import lombok.extern.slf4j.Slf4j;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 @Slf4j
 @Builder
-public class ContentAwareUntypedAgent implements UntypedAgent {  // <-- KEY
+public class ContentAwareUntypedAgent implements UntypedAgent {
 
     private final ChatLanguageModel chatModel;
     private final String systemInstruction;
@@ -19,45 +20,11 @@ public class ContentAwareUntypedAgent implements UntypedAgent {  // <-- KEY
     private final String agentName;
     private final String outputKey;
 
-    /**
-     * Pre-bound content (PDFs, images, etc.) — set before chaining.
-     * The sequence/loop/parallel builder just calls execute(String)
-     * and this content is automatically included.
-     */
+    // Pre-bound at construction time — before passing to sequenceBuilder
     private List<Content> boundContents;
 
     // ----------------------------------------------------------------
-    // Called by AgenticServices.sequenceBuilder / parallel / loop
-    // ----------------------------------------------------------------
-    @Override
-    public String execute(String input) {
-        List<Content> fullContents = new ArrayList<>();
-
-        // 1. DB prompt as instruction prefix
-        fullContents.add(TextContent.from(userPromptText));
-
-        // 2. Pre-bound files (PDFs, images etc.)
-        if (boundContents != null && !boundContents.isEmpty()) {
-            fullContents.addAll(boundContents);
-        }
-
-        // 3. Runtime input from previous agent in chain (if any)
-        if (input != null && !input.isBlank()) {
-            fullContents.add(TextContent.from(input));
-        }
-
-        UserMessage userMessage = UserMessage.from(fullContents);
-        SystemMessage systemMessage = SystemMessage.from(systemInstruction);
-
-        log.debug("[{}] executing with {} content items + runtime input",
-                agentName, fullContents.size());
-
-        ChatResponse response = chatModel.chat(systemMessage, userMessage);
-        return response.aiMessage().text();
-    }
-
-    // ----------------------------------------------------------------
-    // Fluent binder — call this before passing to sequenceBuilder
+    // Fluent binder — call BEFORE handing to sequenceBuilder/parallel/loop
     // ----------------------------------------------------------------
     public ContentAwareUntypedAgent withBoundContent(List<Content> contents) {
         this.boundContents = new ArrayList<>(contents);
@@ -65,15 +32,104 @@ public class ContentAwareUntypedAgent implements UntypedAgent {  // <-- KEY
     }
 
     // ----------------------------------------------------------------
-    // UntypedAgent contract methods
+    // Core internal execution
     // ----------------------------------------------------------------
-    @Override
-    public String getName() {
-        return agentName;
+    private String executeInternal(Map<String, Object> input) {
+        List<Content> fullContents = new ArrayList<>();
+
+        // 1. DB prompt text as instruction prefix
+        fullContents.add(TextContent.from(userPromptText));
+
+        // 2. Pre-bound files (PDFs, images, etc.)
+        if (boundContents != null && !boundContents.isEmpty()) {
+            fullContents.addAll(boundContents);
+        }
+
+        // 3. Any string input passed from previous agent in the chain
+        //    The map may carry prior agent output keyed by outputKey or "input"
+        if (input != null && !input.isEmpty()) {
+            input.values().stream()
+                    .filter(v -> v instanceof String)
+                    .map(v -> TextContent.from((String) v))
+                    .forEach(fullContents::add);
+        }
+
+        UserMessage userMessage = UserMessage.from(fullContents);
+        SystemMessage systemMessage = SystemMessage.from(systemInstruction);
+
+        log.debug("[{}] invoking with {} total content items, inputKeys={}",
+                agentName,
+                fullContents.size(),
+                input != null ? input.keySet() : "none");
+
+        ChatResponse response = chatModel.chat(systemMessage, userMessage);
+        String result = response.aiMessage().text();
+
+        log.debug("[{}] response length: {}", agentName, result.length());
+        return result;
     }
 
+    // ----------------------------------------------------------------
+    // UntypedAgent contract — method 1
+    // Called by sequenceBuilder / parallelBuilder / loopBuilder
+    // ----------------------------------------------------------------
     @Override
-    public String getOutputKey() {
-        return outputKey;
+    public Object invoke(Map<String, Object> input) {
+        return executeInternal(input);
+    }
+
+    // ----------------------------------------------------------------
+    // UntypedAgent contract — method 2
+    // Called when agentic scope (memory/session) context is needed
+    // ----------------------------------------------------------------
+    @Override
+    public ResultWithAgenticScope<String> invokeWithAgenticScope(Map<String, Object> input) {
+        String result = executeInternal(input);
+
+        // Wrap result — AgenticScope is null since we manage no memory here
+        // If you add ChatMemory support later, wire it here
+        return ResultWithAgenticScope.of(result, null);
+    }
+
+    // ----------------------------------------------------------------
+    // UntypedAgent contract — method 3
+    // Scope is stateless for content-aware agents (no memory per session)
+    // Return null unless you wire ChatMemory later
+    // ----------------------------------------------------------------
+    @Override
+    public AgenticScope getAgenticScope(Object memoryId) {
+        return null;
+    }
+
+    // ----------------------------------------------------------------
+    // UntypedAgent contract — method 4
+    // Nothing to evict — stateless
+    // ----------------------------------------------------------------
+    @Override
+    public boolean evictAgenticScope(Object memoryId) {
+        return false;
     }
 }
+```
+
+        ---
+
+        ### How `invoke(Map<String, Object>)` fits the chain
+
+The critical thing to understand is **what the map contains at each chain position**:
+        ```
+sequenceBuilder calls agent1.invoke({"input": ""})
+        │
+        │   extractionAgent builds UserMessage:
+        │   ├── TextContent: DB prompt
+        │   ├── PdfFileContent: doc1.pdf   ← pre-bound
+        │   └── PdfFileContent: doc2.pdf   ← pre-bound
+        │
+                └── returns extracted JSON string
+
+sequenceBuilder calls agent2.invoke({"csm-extraction-agent": "<extracted JSON>"})
+        │
+        │   validationAgent (plain UntypedAgent) picks up
+        │   the prior output from the map automatically
+        │
+                └── returns validated result
