@@ -110,26 +110,12 @@ public class ContentAwareUntypedAgent implements UntypedAgent {
         return false;
     }
 }
-```
 
-        ---
 
-        ### How `invoke(Map<String, Object>)` fits the chain
-
-The critical thing to understand is **what the map contains at each chain position**:
-        ```
-sequenceBuilder calls agent1.invoke({"input": ""})
-        │
-        │   extractionAgent builds UserMessage:
-        │   ├── TextContent: DB prompt
-        │   ├── PdfFileContent: doc1.pdf   ← pre-bound
-        │   └── PdfFileContent: doc2.pdf   ← pre-bound
-        │
-                └── returns extracted JSON string
-
-sequenceBuilder calls agent2.invoke({"csm-extraction-agent": "<extracted JSON>"})
-        │
-        │   validationAgent (plain UntypedAgent) picks up
-        │   the prior output from the map automatically
-        │
-                └── returns validated result
+ContentAwareUntypedAgent extractionAgent = (ContentAwareUntypedAgent)
+        agentFactory.createContentAware(
+                AgentSpec.builder()
+                        .agentName("csm-extraction-agent")
+                        .outputKey("extractedCsm")
+                        .build()
+        ).withBoundContent(documents);
