@@ -2,104 +2,80 @@ package com.deutschebank.nexusai.agent.nonai;
 
 import dev.langchain4j.agentic.UntypedAgent;
 import dev.langchain4j.agentic.scope.AgenticScope;
-import dev.langchain4j.agentic.scope.AgenticScopeRegistry;
 import dev.langchain4j.agentic.scope.ResultWithAgenticScope;
 import lombok.extern.slf4j.Slf4j;
 
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
-/**
- * Base class for all non-AI deterministic agents.
- *
- * Core insight from DefaultAgenticScope source:
- *  - We CANNOT instantiate DefaultAgenticScope (package-private constructors)
- *  - The framework creates and owns the scope via AgenticScopeRegistry
- *  - We inject AgenticScopeRegistry to LOOK UP the scope already created
- *    by the sequence runner for the current memoryId
- *  - getAgenticScope() / evictAgenticScope() delegate to the registry
- */
 @Slf4j
-public abstract class AbstractNonAiAgent implements UntypedAgent {
+public abstract class AbstractNonAiUntypedAgent implements UntypedAgent {
 
-    /**
-     * The framework registry that holds ALL live AgenticScope instances.
-     * The sequence runner creates the scope before invoking any agent —
-     * so by the time our non-AI agent runs, the scope already exists here.
-     */
-    private final AgenticScopeRegistry agenticScopeRegistry;
-
-    protected AbstractNonAiAgent(AgenticScopeRegistry agenticScopeRegistry) {
-        this.agenticScopeRegistry = agenticScopeRegistry;
-    }
+    // AgenticScopeAccess: framework calls these to manage scope lifecycle.
+    // Non-AI agents hold no LLM memory — so we keep a minimal map
+    // keyed by memoryId, storing only the scope reference the framework
+    // passed us via invokeWithAgenticScope.
+    private final ConcurrentHashMap<Object, AgenticScope> scopeMap = new ConcurrentHashMap<>();
 
     // -------------------------------------------------------------------------
-    // UntypedAgent — entry points called by sequenceBuilder
+    // UntypedAgent
     // -------------------------------------------------------------------------
 
     @Override
     public Object invoke(Map<String, Object> input) {
-        Object memoryId = extractMemoryId(input);
-        AgenticScope scope = agenticScopeRegistry.get(memoryId);   // look up, not create
-
-        log.debug("[{}] {} invoked. scope found={}",
-                memoryId, agentName(), scope != null);
-
-        return process(input, scope);
+        // Scope is not available via invoke() alone — use invokeWithAgenticScope
+        // if you need scope access. For simple pass-through agents this is fine.
+        return process(input, null);
     }
 
     @Override
     public ResultWithAgenticScope<String> invokeWithAgenticScope(Map<String, Object> input) {
+        // The framework calls this when it needs both the result AND the scope.
+        // We look up the scope from the map (populated by the framework-owned
+        // sequence runner setting it before calling us).
         Object memoryId = extractMemoryId(input);
-        AgenticScope scope = agenticScopeRegistry.get(memoryId);   // same lookup
+        AgenticScope scope = scopeMap.get(memoryId);
 
         Object result = process(input, scope);
         String resultStr = result != null ? result.toString() : null;
 
-        // Hand back the framework-owned scope — we never construct one ourselves
-        return new ResultWithAgenticScope( scope,resultStr);
+        return ResultWithAgenticScope.of(resultStr, scope);
     }
 
     // -------------------------------------------------------------------------
-    // AgenticScopeAccess — delegate entirely to the registry
+    // AgenticScopeAccess
     // -------------------------------------------------------------------------
 
     @Override
     public AgenticScope getAgenticScope(Object memoryId) {
-        // Non-AI agents hold no LLM memory of their own.
-        // Delegate to the registry — the framework created the scope there.
-        return agenticScopeRegistry.get(memoryId);
+        return scopeMap.get(memoryId);
     }
 
     @Override
     public boolean evictAgenticScope(Object memoryId) {
-        // Non-AI agents should not evict the shared scope —
-        // that would destroy state for all downstream agents.
-        // Return false: nothing to evict on our behalf.
-        return false;
+        return scopeMap.remove(memoryId) != null;
+    }
+
+    // Package-visible so the sequence runner / framework can register
+    // the scope it created before invoking this agent
+    public void registerScope(Object memoryId, AgenticScope scope) {
+        if (scope != null) {
+            scopeMap.put(memoryId, scope);
+        }
     }
 
     // -------------------------------------------------------------------------
-    // Subclass contract — implement your deterministic logic here
+    // Subclass contract
     // -------------------------------------------------------------------------
 
     /**
-     * @param input  Input map from the previous step in the sequence
-     * @param scope  The shared AgenticScope created by the framework for this
-     *               sequence run. May be null if the registry hasn't initialised
-     *               it yet — always null-check before reading.
-     *               Use scope.writeState() / scope.readState() to share state
-     *               with AI agents in the same sequence.
-     * @return       Result forwarded to the next step
+     * Implement deterministic logic here. No LLM.
+     *
+     * @param input  Map from the previous agent in the sequence
+     * @param scope  Shared AgenticScope — may be null if framework didn't
+     *               populate it yet. Always null-check.
      */
     protected abstract Object process(Map<String, Object> input, AgenticScope scope);
-
-    protected String agentName() {
-        return getClass().getSimpleName();
-    }
-
-    // -------------------------------------------------------------------------
-    // Helpers
-    // -------------------------------------------------------------------------
 
     protected Object extractMemoryId(Map<String, Object> input) {
         if (input.containsKey("memoryId")) return input.get("memoryId");
