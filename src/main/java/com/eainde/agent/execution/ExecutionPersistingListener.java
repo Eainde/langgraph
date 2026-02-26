@@ -9,7 +9,7 @@ public class ExecutionPersistingListener implements AgentListener {
     private final Map<String, String> ongoingExecutions = new ConcurrentHashMap<>();
     private final Map<String, Instant> startTimes = new ConcurrentHashMap<>();
 
-    // Tracks how many times before has fired for a given key without a matching after
+    // Tracks current depth per agent+memory
     private final Map<String, AtomicInteger> callDepth = new ConcurrentHashMap<>();
 
     public ExecutionPersistingListener(OracleAgentExecutionStore executionStore) {
@@ -21,19 +21,16 @@ public class ExecutionPersistingListener implements AgentListener {
         try {
             String agentName = agentRequest.agentName();
             Object memoryId = extractMemoryId(agentRequest.agenticScope());
-            String trackingKey = buildTrackingKey(agentName, memoryId);
+            String baseKey = buildBaseKey(agentName, memoryId);
 
             int depth = callDepth
-                    .computeIfAbsent(trackingKey, k -> new AtomicInteger(0))
+                    .computeIfAbsent(baseKey, k -> new AtomicInteger(0))
                     .incrementAndGet();
 
-            // Only INSERT on the first before (depth == 1)
-            // Subsequent duplicate calls from inheritance just increment the counter
-            if (depth > 1) {
-                return;
-            }
-
+            // Each depth gets its own tracking key → its own row
+            String trackingKey = baseKey + "::depth-" + depth;
             String executionId = UUID.randomUUID().toString();
+
             ongoingExecutions.put(trackingKey, executionId);
             startTimes.put(trackingKey, Instant.now());
 
@@ -49,7 +46,8 @@ public class ExecutionPersistingListener implements AgentListener {
             );
 
             executionStore.insertRunning(record);
-            log.debug("Agent execution started: agent={}, executionId={}", agentName, executionId);
+            log.debug("Agent execution started: agent={}, depth={}, executionId={}",
+                    agentName, depth, executionId);
         } catch (Exception e) {
             log.warn("Failed to persist agent execution start for agent: {}",
                     agentRequest.agentName(), e);
@@ -61,27 +59,27 @@ public class ExecutionPersistingListener implements AgentListener {
         try {
             String agentName = agentResponse.agentName();
             Object memoryId = extractMemoryId(agentResponse.agenticScope());
-            String trackingKey = buildTrackingKey(agentName, memoryId);
+            String baseKey = buildBaseKey(agentName, memoryId);
 
-            AtomicInteger depth = callDepth.get(trackingKey);
+            AtomicInteger depth = callDepth.get(baseKey);
             if (depth == null) return;
 
-            int remaining = depth.decrementAndGet();
-
-            // Only UPDATE on the last after (depth back to 0)
-            if (remaining > 0) {
+            int currentDepth = depth.getAndDecrement();
+            if (currentDepth <= 0) {
+                callDepth.remove(baseKey);
                 return;
             }
 
-            callDepth.remove(trackingKey);
+            String trackingKey = baseKey + "::depth-" + currentDepth;
             String executionId = ongoingExecutions.remove(trackingKey);
-            Instant startedAt = startTimes.remove(trackingKey);
+            startTimes.remove(trackingKey);
 
+            if (currentDepth == 0) callDepth.remove(baseKey);
             if (executionId == null) return;
 
-            Instant completedAt = Instant.now();
-            executionStore.markSuccess(executionId, agentResponse.output(), completedAt);
-            log.debug("Agent execution completed: agent={}, executionId={}", agentName, executionId);
+            executionStore.markSuccess(executionId, agentResponse.output(), Instant.now());
+            log.debug("Agent execution completed: agent={}, depth={}, executionId={}",
+                    agentName, currentDepth, executionId);
         } catch (Exception e) {
             log.warn("Failed to persist agent execution completion", e);
         }
@@ -92,26 +90,28 @@ public class ExecutionPersistingListener implements AgentListener {
         try {
             String agentName = agentInvocationError.agentName();
             Object memoryId = extractMemoryId(agentInvocationError.agenticScope());
-            String trackingKey = buildTrackingKey(agentName, memoryId);
+            String baseKey = buildBaseKey(agentName, memoryId);
 
-            AtomicInteger depth = callDepth.get(trackingKey);
+            AtomicInteger depth = callDepth.get(baseKey);
             if (depth == null) return;
 
-            int remaining = depth.decrementAndGet();
-
-            if (remaining > 0) {
+            int currentDepth = depth.getAndDecrement();
+            if (currentDepth <= 0) {
+                callDepth.remove(baseKey);
                 return;
             }
 
-            callDepth.remove(trackingKey);
+            String trackingKey = baseKey + "::depth-" + currentDepth;
             String executionId = ongoingExecutions.remove(trackingKey);
             startTimes.remove(trackingKey);
 
+            if (currentDepth == 0) callDepth.remove(baseKey);
             if (executionId == null) return;
 
-            Instant completedAt = Instant.now();
-            executionStore.markFailed(executionId, buildErrorMessage(agentInvocationError.error()), completedAt);
-            log.debug("Agent execution failed: agent={}, executionId={}", agentName, executionId);
+            executionStore.markFailed(executionId,
+                    buildErrorMessage(agentInvocationError.error()), Instant.now());
+            log.debug("Agent execution failed: agent={}, depth={}, executionId={}",
+                    agentName, currentDepth, executionId);
         } catch (Exception e) {
             log.warn("Failed to persist agent execution error", e);
         }
@@ -120,6 +120,10 @@ public class ExecutionPersistingListener implements AgentListener {
     @Override
     public boolean inheritedBySubagents() {
         return true;
+    }
+
+    private String buildBaseKey(String agentName, Object memoryId) {
+        return (memoryId != null ? memoryId.toString() : "ephemeral") + "::" + agentName;
     }
 
     // ... rest of helpers stay the same
