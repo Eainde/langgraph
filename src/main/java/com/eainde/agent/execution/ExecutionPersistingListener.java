@@ -1,5 +1,3 @@
-package com.eainde.agent.execution;
-
 public class ExecutionPersistingListener implements AgentListener {
 
     private static final Logger log = LoggerFactory.getLogger(ExecutionPersistingListener.class);
@@ -8,9 +6,6 @@ public class ExecutionPersistingListener implements AgentListener {
     private final Map<Object, AtomicInteger> invocationCounters = new ConcurrentHashMap<>();
     private final Map<String, String> ongoingExecutions = new ConcurrentHashMap<>();
     private final Map<String, Instant> startTimes = new ConcurrentHashMap<>();
-
-    // Tracks current depth per agent+memory
-    private final Map<String, AtomicInteger> callDepth = new ConcurrentHashMap<>();
 
     public ExecutionPersistingListener(OracleAgentExecutionStore executionStore) {
         this.executionStore = executionStore;
@@ -21,33 +16,27 @@ public class ExecutionPersistingListener implements AgentListener {
         try {
             String agentName = agentRequest.agentName();
             Object memoryId = extractMemoryId(agentRequest.agenticScope());
-            String baseKey = buildBaseKey(agentName, memoryId);
+            String trackingKey = buildTrackingKey(agentName, memoryId);
 
-            int depth = callDepth
-                    .computeIfAbsent(baseKey, k -> new AtomicInteger(0))
-                    .incrementAndGet();
+            // computeIfAbsent guarantees the lambda runs ONLY ONCE per key
+            // Second call from inherited listener gets existing value, no DB write
+            ongoingExecutions.computeIfAbsent(trackingKey, k -> {
+                String executionId = UUID.randomUUID().toString();
+                startTimes.put(trackingKey, Instant.now());
 
-            // Each depth gets its own tracking key → its own row
-            String trackingKey = baseKey + "::depth-" + depth;
-            String executionId = UUID.randomUUID().toString();
+                AgentExecutionRecord record = AgentExecutionRecord.running(
+                        executionId,
+                        agentName,
+                        memoryId != null ? memoryId.toString() : null,
+                        agentName,
+                        getNextOrder(memoryId),
+                        safeGetInputs(agentRequest)
+                );
 
-            ongoingExecutions.put(trackingKey, executionId);
-            startTimes.put(trackingKey, Instant.now());
-
-            int order = getNextOrder(memoryId);
-
-            AgentExecutionRecord record = AgentExecutionRecord.running(
-                    executionId,
-                    agentName,
-                    memoryId != null ? memoryId.toString() : null,
-                    agentName,
-                    order,
-                    safeGetInputs(agentRequest)
-            );
-
-            executionStore.insertRunning(record);
-            log.debug("Agent execution started: agent={}, depth={}, executionId={}",
-                    agentName, depth, executionId);
+                executionStore.insertRunning(record);
+                log.debug("Agent execution started: agent={}, executionId={}", agentName, executionId);
+                return executionId;
+            });
         } catch (Exception e) {
             log.warn("Failed to persist agent execution start for agent: {}",
                     agentRequest.agentName(), e);
@@ -59,27 +48,15 @@ public class ExecutionPersistingListener implements AgentListener {
         try {
             String agentName = agentResponse.agentName();
             Object memoryId = extractMemoryId(agentResponse.agenticScope());
-            String baseKey = buildBaseKey(agentName, memoryId);
+            String trackingKey = buildTrackingKey(agentName, memoryId);
 
-            AtomicInteger depth = callDepth.get(baseKey);
-            if (depth == null) return;
-
-            int currentDepth = depth.getAndDecrement();
-            if (currentDepth <= 0) {
-                callDepth.remove(baseKey);
-                return;
-            }
-
-            String trackingKey = baseKey + "::depth-" + currentDepth;
-            String executionId = ongoingExecutions.remove(trackingKey);
-            startTimes.remove(trackingKey);
-
-            if (currentDepth == 0) callDepth.remove(baseKey);
+            // get, not remove — so the second after call is harmless
+            String executionId = ongoingExecutions.get(trackingKey);
             if (executionId == null) return;
 
+            // UPDATE is idempotent — second call just overwrites with same data
             executionStore.markSuccess(executionId, agentResponse.output(), Instant.now());
-            log.debug("Agent execution completed: agent={}, depth={}, executionId={}",
-                    agentName, currentDepth, executionId);
+            log.debug("Agent execution completed: agent={}, executionId={}", agentName, executionId);
         } catch (Exception e) {
             log.warn("Failed to persist agent execution completion", e);
         }
@@ -90,30 +67,30 @@ public class ExecutionPersistingListener implements AgentListener {
         try {
             String agentName = agentInvocationError.agentName();
             Object memoryId = extractMemoryId(agentInvocationError.agenticScope());
-            String baseKey = buildBaseKey(agentName, memoryId);
+            String trackingKey = buildTrackingKey(agentName, memoryId);
 
-            AtomicInteger depth = callDepth.get(baseKey);
-            if (depth == null) return;
-
-            int currentDepth = depth.getAndDecrement();
-            if (currentDepth <= 0) {
-                callDepth.remove(baseKey);
-                return;
-            }
-
-            String trackingKey = baseKey + "::depth-" + currentDepth;
-            String executionId = ongoingExecutions.remove(trackingKey);
-            startTimes.remove(trackingKey);
-
-            if (currentDepth == 0) callDepth.remove(baseKey);
+            String executionId = ongoingExecutions.get(trackingKey);
             if (executionId == null) return;
 
             executionStore.markFailed(executionId,
                     buildErrorMessage(agentInvocationError.error()), Instant.now());
-            log.debug("Agent execution failed: agent={}, depth={}, executionId={}",
-                    agentName, currentDepth, executionId);
+            log.debug("Agent execution failed: agent={}, executionId={}", agentName, executionId);
         } catch (Exception e) {
             log.warn("Failed to persist agent execution error", e);
+        }
+    }
+
+    /**
+     * Clean up tracking maps when scope is destroyed.
+     */
+    @Override
+    public void beforeAgenticScopeDestroyed(AgenticScope agenticScope) {
+        if (agenticScope instanceof DefaultAgenticScope defaultScope) {
+            Object memoryId = defaultScope.memoryId();
+            String prefix = (memoryId != null ? memoryId.toString() : "ephemeral") + "::";
+            ongoingExecutions.keySet().removeIf(k -> k.startsWith(prefix));
+            startTimes.keySet().removeIf(k -> k.startsWith(prefix));
+            invocationCounters.remove(memoryId);
         }
     }
 
@@ -122,7 +99,7 @@ public class ExecutionPersistingListener implements AgentListener {
         return true;
     }
 
-    private String buildBaseKey(String agentName, Object memoryId) {
+    private String buildTrackingKey(String agentName, Object memoryId) {
         return (memoryId != null ? memoryId.toString() : "ephemeral") + "::" + agentName;
     }
 
