@@ -8,6 +8,8 @@ import dev.langchain4j.agentic.UntypedAgent;
 import dev.langchain4j.agentic.scope.AgenticScope;
 import lombok.extern.log4j.Log4j2;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -15,32 +17,35 @@ import java.util.Map;
  * for agents that may produce output exceeding the model's output token limit.
  *
  * <p>Implements {@link UntypedAgent} so it fits directly into
- * {@code agentFactory.sequence()} alongside regular agents and other wrappers
- * like {@code Wave5MergerAgent}.</p>
+ * {@code agentFactory.sequence()} and {@code agentFactory.parallel()}
+ * alongside regular agents and other wrappers like {@code Wave5MergerAgent}.</p>
  *
  * <h3>How it works:</h3>
  * <pre>
  * invoke(input)
  *   │
- *   ├── 1. Create fresh BatchAccumulatorTool (new POJO, not shared)
- *   ├── 2. Create fresh agent from spec WITH this tool instance
- *   ├── 3. Invoke agent (LangChain4j tool loop runs automatically)
- *   │       └── LLM decides: small output → return directly
- *   │                         large output → call submit_batch × N → return summary
- *   ├── 4. Check tool.wasUsed()
- *   │       ├── YES → return tool.getMergedResult()
- *   │       └── NO  → return raw agent output
- *   └── 5. Tool + agent garbage collected (no state leaks)
+ *   ├── 1. Create fresh BatchAccumulatorTool
+ *   ├── 2. Build a NEW AgentSpec = original spec + tool added
+ *   ├── 3. agentFactory.create(specWithTool) — standard create, no changes to AgentFactory
+ *   ├── 4. agent.invoke(input) — LangChain4j tool loop runs automatically
+ *   │       └── Small output → LLM returns JSON directly (tool unused)
+ *   │       └── Large output → LLM calls submit_batch × N → returns summary
+ *   ├── 5. Check tool.wasUsed()
+ *   │       ├── YES → return tool.getMergedResult() (replaces summary with real data)
+ *   │       └── NO  → return raw agent output (pass-through)
+ *   └── 6. Tool + agent garbage collected
  * </pre>
  *
- * <h3>Transparent to the framework:</h3>
- * <ul>
- *   <li>If output is small → wrapper is a no-op (zero overhead)</li>
- *   <li>If output is large → wrapper merges batches automatically</li>
- *   <li>Next agent in sequence always receives correct merged output</li>
- * </ul>
+ * <h3>Why the wrapper is needed (even though tool is on the spec):</h3>
+ * <ol>
+ *   <li><b>Output replacement:</b> When the LLM uses the tool, agent.invoke() returns
+ *       a summary string ("Extraction complete. 130 records submitted."), NOT the actual
+ *       data. The wrapper replaces this with the merged records from the tool.</li>
+ *   <li><b>Fresh state:</b> A new tool instance is created per invocation, so there's
+ *       no stale data from previous requests.</li>
+ * </ol>
  *
- * <h3>Usage in a sequence:</h3>
+ * <h3>Usage:</h3>
  * <pre>
  * agentFactory.sequence("rawNames",
  *     new BatchingAgentWrapper(agentFactory, CANDIDATE_EXTRACTOR_SPEC, objectMapper),
@@ -52,19 +57,19 @@ import java.util.Map;
 public class BatchingAgentWrapper implements UntypedAgent {
 
     private final AgentFactory agentFactory;
-    private final AgentSpec agentSpec;
+    private final AgentSpec baseSpec;
     private final ObjectMapper objectMapper;
 
     /**
-     * @param agentFactory factory to create fresh agent instances
-     * @param agentSpec    the spec for the agent to wrap (includes prompt, guardrails, etc.)
+     * @param agentFactory factory to create agents (standard create method, no changes)
+     * @param baseSpec     the original AgentSpec (without the batch tool)
      * @param objectMapper shared Jackson mapper for batch merging
      */
     public BatchingAgentWrapper(AgentFactory agentFactory,
-                                AgentSpec agentSpec,
+                                AgentSpec baseSpec,
                                 ObjectMapper objectMapper) {
         this.agentFactory = agentFactory;
-        this.agentSpec = agentSpec;
+        this.baseSpec = baseSpec;
         this.objectMapper = objectMapper;
     }
 
@@ -74,62 +79,51 @@ public class BatchingAgentWrapper implements UntypedAgent {
 
     @Override
     public Object invoke(Map<String, Object> input) {
-        String agentName = agentSpec.name();
+        String agentName = baseSpec.getAgentName();
         log.debug("[{}] BatchingAgentWrapper — starting invocation", agentName);
 
         // ── Step 1: Fresh tool for this invocation ──────────────────────
         BatchAccumulatorTool tool = new BatchAccumulatorTool(objectMapper);
 
-        // ── Step 2: Create fresh agent with this tool ───────────────────
-        // AgentSpec carries: prompt, guardrails, inputs/outputs config
-        // Tool is the only thing that varies per invocation
-        UntypedAgent agent = agentFactory.create(agentSpec, tool);
+        // ── Step 2: Build new spec with tool added ──────────────────────
+        AgentSpec specWithTool = buildSpecWithTool(tool);
 
-        // ── Step 3: Invoke the agent ────────────────────────────────────
-        // LangChain4j's tool execution loop handles everything:
-        //   LLM response → tool_call detected → execute tool → send result to LLM → repeat
-        //   Until LLM returns a final text response (no more tool_calls)
+        // ── Step 3: Create fresh agent from modified spec ───────────────
+        UntypedAgent agent = agentFactory.create(specWithTool);
+
+        // ── Step 4: Invoke the agent ────────────────────────────────────
+        // LangChain4j sees the @Tool method on BatchAccumulatorTool,
+        // enters its automatic tool execution loop:
+        //   LLM response → tool_call → execute tool → result to LLM → repeat
+        //   Until LLM returns final text (no more tool_calls)
         Object rawResult = agent.invoke(input);
 
-        // ── Step 4: Check if batching happened ──────────────────────────
-        if (tool.wasUsed()) {
-            // LLM used batching — rawResult is just a summary string
-            // Real data is in the tool's accumulator
-            String mergedResult = tool.getMergedResult();
-
-            log.info("[{}] Batching used — {} batches, {} total records merged",
-                    agentName, tool.getBatchCount(), tool.getTotalRecordCount());
-
-            return mergedResult;
-        }
-
-        // LLM returned everything in one shot — no batching needed
-        log.debug("[{}] No batching needed — output returned directly", agentName);
-        return rawResult;
+        // ── Step 5: Check if batching happened ──────────────────────────
+        return resolveResult(agentName, tool, rawResult);
     }
 
     @Override
     public ResultWithAgenticScope<String> invokeWithAgenticScope(Map<String, Object> input) {
-        String agentName = agentSpec.name();
+        String agentName = baseSpec.getAgentName();
         log.debug("[{}] BatchingAgentWrapper — starting invocation (with scope)", agentName);
 
         // ── Step 1: Fresh tool ──────────────────────────────────────────
         BatchAccumulatorTool tool = new BatchAccumulatorTool(objectMapper);
 
-        // ── Step 2: Fresh agent ─────────────────────────────────────────
-        UntypedAgent agent = agentFactory.create(agentSpec, tool);
+        // ── Step 2: Build new spec with tool ────────────────────────────
+        AgentSpec specWithTool = buildSpecWithTool(tool);
 
-        // ── Step 3: Invoke with scope access ────────────────────────────
+        // ── Step 3: Create fresh agent ──────────────────────────────────
+        UntypedAgent agent = agentFactory.create(specWithTool);
+
+        // ── Step 4: Invoke with scope access ────────────────────────────
         ResultWithAgenticScope<String> result = agent.invokeWithAgenticScope(input);
 
-        // ── Step 4: Merge if batching happened ──────────────────────────
+        // ── Step 5: Merge if batching happened ──────────────────────────
         if (tool.wasUsed()) {
             String mergedResult = tool.getMergedResult();
-
             log.info("[{}] Batching used — {} batches, {} total records merged (with scope)",
                     agentName, tool.getBatchCount(), tool.getTotalRecordCount());
-
-            // Return merged result with the original scope
             return new ResultWithAgenticScope<>(result.agenticScope(), mergedResult);
         }
 
@@ -143,7 +137,6 @@ public class BatchingAgentWrapper implements UntypedAgent {
 
     @Override
     public AgenticScope getAgenticScope(Object memoryId) {
-        // Scope is per-invocation, not cached — return null
         return null;
     }
 
@@ -153,16 +146,56 @@ public class BatchingAgentWrapper implements UntypedAgent {
     }
 
     // =========================================================================
+    //  Internal Helpers
+    // =========================================================================
+
+    /**
+     * Builds a new AgentSpec that includes the batch accumulator tool,
+     * merged with any tools already on the base spec.
+     *
+     * <p>Uses {@code baseSpec.toBuilder()} to copy all existing configuration
+     * (prompt, guardrails, inputs, outputs, listeners, etc.) and adds the tool.</p>
+     */
+    private AgentSpec buildSpecWithTool(BatchAccumulatorTool tool) {
+        // Merge existing spec tools + the batch tool
+        List<Object> mergedTools = new ArrayList<>();
+
+        if (baseSpec.hasTools()) {
+            mergedTools.addAll(baseSpec.getTools());
+        }
+
+        mergedTools.add(tool);
+
+        return baseSpec.toBuilder()
+                .tools(mergedTools)
+                .build();
+    }
+
+    /**
+     * Resolves the final result: if the tool was used, returns merged batch data;
+     * otherwise returns the raw agent output as-is.
+     */
+    private Object resolveResult(String agentName, BatchAccumulatorTool tool, Object rawResult) {
+        if (tool.wasUsed()) {
+            String mergedResult = tool.getMergedResult();
+            log.info("[{}] Batching used — {} batches, {} total records merged",
+                    agentName, tool.getBatchCount(), tool.getTotalRecordCount());
+            return mergedResult;
+        }
+
+        log.debug("[{}] No batching needed — output returned directly", agentName);
+        return rawResult;
+    }
+
+    // =========================================================================
     //  Accessors (for debugging/testing)
     // =========================================================================
 
-    /** The spec this wrapper delegates to. */
-    public AgentSpec getAgentSpec() {
-        return agentSpec;
+    public AgentSpec getBaseSpec() {
+        return baseSpec;
     }
 
-    /** The agent name (from spec). */
     public String getAgentName() {
-        return agentSpec.name();
+        return baseSpec.getAgentName();
     }
 }
