@@ -39,6 +39,17 @@ import java.util.List;
  *   <li>Agent 1's batches are cleared before Agent 2 runs (by the input guardrail)</li>
  *   <li>No stale state — reset() is called before every agent invocation</li>
  * </ul>
+ *
+ * No. Same answer — the fallback handles it automatically.
+ * The only scenario where you'd add an entry:
+ * json// New agent outputs TWO arrays:
+ * {
+ *   "primary_results": [{ "id": 1, ... }, { "id": 2, ... }],
+ *   "metadata_logs": ["log1", "log2", "log3"]
+ * }
+ * Without a knownKeys entry, the fallback picks the first array it finds. If metadata_logs happens to come first in the JSON, it merges the wrong array.
+ * Adding "primary_results" to knownKeys forces it to pick the correct one.
+ * If your new agent has only ONE array (which is the case for all 12 of your current agents), you don't need to touch knownKeys at all
  */
 @Log4j2
 @Component
