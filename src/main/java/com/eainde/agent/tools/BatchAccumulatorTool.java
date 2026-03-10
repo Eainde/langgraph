@@ -8,41 +8,90 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import dev.langchain4j.agent.tool.P;
 import dev.langchain4j.agent.tool.Tool;
 import lombok.extern.log4j.Log4j2;
+import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Generic batch accumulator tool for LLM-driven pagination.
+ * Singleton batch accumulator tool with ThreadLocal-isolated state.
  *
- * <p>When an agent's output exceeds the model's output token limit, the LLM
- * calls this tool repeatedly to submit results in manageable batches. The tool
- * accumulates all batches in memory, and after the agent completes, the caller
- * reads the merged result.</p>
+ * <p>This is a Spring singleton bean — ONE instance shared by ALL agents.
+ * Per-invocation state is isolated via ThreadLocal, so concurrent requests
+ * never interfere with each other.</p>
  *
- * <h3>Lifecycle:</h3>
+ * <h3>How it integrates (no wrapper needed):</h3>
  * <pre>
- * new BatchAccumulatorTool(objectMapper)     ← created fresh per agent invocation
- *   → LLM calls submit_batch(batch1)        ← accumulates
- *   → LLM calls submit_batch(batch2)        ← accumulates
- *   → LLM calls submit_batch(batch3)        ← accumulates
- *   → LLM returns final text response
- *   → caller reads wasUsed() + getMergedResult()
- *   → tool is discarded (garbage collected)
+ * AgentSpec:
+ *   .tools(List.of(batchAccumulatorTool))          ← singleton on spec
+ *   .inputGuardrails(batchResetGuardrail, ...)     ← resets before each agent
+ *   .outputGuardrails(..., batchMergerGuardrail)   ← merges after each agent
+ *
+ * Lifecycle per agent invocation:
+ *   1. InputGuardrail  → tool.reset()               (fresh state)
+ *   2. LLM runs        → tool.submitBatch() × N     (accumulates batches)
+ *   3. OutputGuardrail  → tool.wasUsed()?            (check + merge + replace output)
  * </pre>
  *
- * <h3>NOT a Spring bean. Created with {@code new}. No shared state.</h3>
+ * <h3>ThreadLocal guarantees:</h3>
+ * <ul>
+ *   <li>Request A's batches are invisible to Request B</li>
+ *   <li>Agent 1's batches are cleared before Agent 2 runs (by the input guardrail)</li>
+ *   <li>No stale state — reset() is called before every agent invocation</li>
+ * </ul>
  */
 @Log4j2
+@Component
 public class BatchAccumulatorTool {
 
     private final ObjectMapper objectMapper;
-    private final List<String> batches = new ArrayList<>();
-    private int totalRecordCount = 0;
-    private int batchCount = 0;
+
+    // ── ThreadLocal state: isolated per request thread ──────────────────
+    private final ThreadLocal<List<String>> batches =
+            ThreadLocal.withInitial(ArrayList::new);
+    private final ThreadLocal<Integer> totalRecordCount =
+            ThreadLocal.withInitial(() -> 0);
+    private final ThreadLocal<Integer> batchCount =
+            ThreadLocal.withInitial(() -> 0);
 
     public BatchAccumulatorTool(ObjectMapper objectMapper) {
         this.objectMapper = objectMapper;
+    }
+
+    // =========================================================================
+    //  State Management — called by guardrails
+    // =========================================================================
+
+    /**
+     * Resets state for the current thread. Called by {@code BatchResetInputGuardrail}
+     * BEFORE each agent invocation.
+     */
+    public void reset() {
+        batches.get().clear();
+        totalRecordCount.set(0);
+        batchCount.set(0);
+    }
+
+    /**
+     * Whether the LLM used batching in the current invocation.
+     * Called by {@code BatchMergerOutputGuardrail} AFTER the agent completes.
+     */
+    public boolean wasUsed() {
+        return !batches.get().isEmpty();
+    }
+
+    /**
+     * Number of batches submitted in the current invocation.
+     */
+    public int getBatchCount() {
+        return batchCount.get();
+    }
+
+    /**
+     * Total records across all batches in the current invocation.
+     */
+    public int getTotalRecordCount() {
+        return totalRecordCount.get();
     }
 
     // =========================================================================
@@ -61,87 +110,63 @@ public class BatchAccumulatorTool {
      */
     @Tool("""
         Submit a batch of extracted records when your output is large.
+        You MUST use this tool when your output would contain more than 40 records.
         Call this repeatedly with batches of ~40 records each.
         Use the same JSON schema as your normal output.
-        Continue calling until all records are submitted.""")
+        Maintain sequential ID numbering across batches.
+        After the last batch, return ONLY a text summary, NOT JSON.""")
     public String submitBatch(
             @P("JSON object containing the batch of records, same schema as normal output")
             String jsonBatch) {
 
-        batchCount++;
-        batches.add(jsonBatch);
+        int currentBatch = batchCount.get() + 1;
+        batchCount.set(currentBatch);
+        batches.get().add(jsonBatch);
 
-        // Count records in this batch
         int batchRecords = countRecords(jsonBatch);
-        totalRecordCount += batchRecords;
+        int runningTotal = totalRecordCount.get() + batchRecords;
+        totalRecordCount.set(runningTotal);
 
         log.info("Batch {} received: {} records (running total: {})",
-                batchCount, batchRecords, totalRecordCount);
+                currentBatch, batchRecords, runningTotal);
 
         return String.format(
                 "Batch %d received: %d records (%d total so far). "
-                        + "If there are more records to extract, continue calling submit_batch. "
-                        + "If all records have been submitted, return a summary text "
-                        + "(do NOT return JSON — just confirm completion).",
-                batchCount, batchRecords, totalRecordCount);
+                        + "If there are more records to extract, continue calling submit_batch "
+                        + "with the next batch. Maintain sequential IDs (next id starts at %d). "
+                        + "If all records have been submitted, return ONLY a text summary.",
+                currentBatch, batchRecords, runningTotal, runningTotal + 1);
     }
 
     // =========================================================================
-    //  Read methods — called by BatchingAgentWrapper after agent completes
+    //  Merge — called by BatchMergerOutputGuardrail
     // =========================================================================
-
-    /**
-     * Whether the LLM used batching (called submit_batch at least once).
-     * If false, the agent returned everything in a single response.
-     */
-    public boolean wasUsed() {
-        return !batches.isEmpty();
-    }
-
-    /**
-     * Number of batches submitted.
-     */
-    public int getBatchCount() {
-        return batchCount;
-    }
-
-    /**
-     * Total records across all batches.
-     */
-    public int getTotalRecordCount() {
-        return totalRecordCount;
-    }
 
     /**
      * Merges all accumulated batches into a single JSON result.
      *
-     * <p>Strategy: finds the first array field in each batch's JSON object,
-     * concatenates all arrays, and renumbers IDs sequentially.</p>
-     *
-     * <p>Example:</p>
-     * <pre>
-     * Batch 1: {"raw_names": [{"id":1,...}, {"id":2,...}]}
-     * Batch 2: {"raw_names": [{"id":1,...}, {"id":2,...}]}  ← LLM may restart IDs
-     * Merged:  {"raw_names": [{"id":1,...}, {"id":2,...}, {"id":3,...}, {"id":4,...}]}
-     * </pre>
+     * <p>Finds the primary array field in each batch, concatenates all arrays,
+     * and renumbers IDs sequentially.</p>
      *
      * @return merged JSON string with all records and sequential IDs
      */
     public String getMergedResult() {
-        if (batches.isEmpty()) {
+        List<String> currentBatches = batches.get();
+
+        if (currentBatches.isEmpty()) {
             return "{}";
         }
 
-        // Single batch — return as-is (no merge needed)
-        if (batches.size() == 1) {
-            return batches.get(0);
+        if (currentBatches.size() == 1) {
+            return currentBatches.get(0);
         }
 
         try {
-            return mergeBatches();
+            return mergeBatches(currentBatches);
         } catch (Exception e) {
-            log.error("Failed to merge {} batches — concatenating raw JSON", batchCount, e);
-            return fallbackConcatenate();
+            log.error("Failed to merge {} batches — concatenating raw JSON",
+                    currentBatches.size(), e);
+            return fallbackConcatenate(currentBatches);
         }
     }
 
@@ -149,26 +174,19 @@ public class BatchAccumulatorTool {
     //  Merge Logic
     // =========================================================================
 
-    /**
-     * Merges batches by finding the primary record array in each batch
-     * and concatenating them into a single array with sequential IDs.
-     */
-    private String mergeBatches() throws JsonProcessingException {
-        // Parse first batch to determine the structure (which key holds the array)
-        JsonNode firstBatch = objectMapper.readTree(batches.get(0));
+    private String mergeBatches(List<String> batchList) throws JsonProcessingException {
+        JsonNode firstBatch = objectMapper.readTree(batchList.get(0));
         String arrayKey = findPrimaryArrayKey(firstBatch);
 
         if (arrayKey == null) {
             log.warn("No array field found in batch output — falling back to concatenation");
-            return fallbackConcatenate();
+            return fallbackConcatenate(batchList);
         }
 
-        // Collect all records from all batches
         ArrayNode mergedArray = objectMapper.createArrayNode();
 
-        for (String batchJson : batches) {
+        for (String batchJson : batchList) {
             JsonNode batch = objectMapper.readTree(batchJson);
-
             JsonNode arrayNode = batch.get(arrayKey);
             if (arrayNode != null && arrayNode.isArray()) {
                 for (JsonNode record : arrayNode) {
@@ -177,31 +195,22 @@ public class BatchAccumulatorTool {
             }
         }
 
-        // Renumber IDs sequentially (LLM may restart IDs per batch)
         renumberIds(mergedArray);
 
-        // Build the merged result using the same top-level structure as batch 1
         ObjectNode result = firstBatch.deepCopy();
         result.set(arrayKey, mergedArray);
 
-        // Copy any non-array fields from the LAST batch (most complete metadata)
-        JsonNode lastBatch = objectMapper.readTree(batches.get(batches.size() - 1));
+        // Copy non-array fields from last batch (most complete metadata)
+        JsonNode lastBatch = objectMapper.readTree(batchList.get(batchList.size() - 1));
         copyNonArrayFields(lastBatch, result, arrayKey);
 
         log.info("Merged {} batches: {} total records under key '{}'",
-                batchCount, mergedArray.size(), arrayKey);
+                batchList.size(), mergedArray.size(), arrayKey);
 
         return objectMapper.writeValueAsString(result);
     }
 
-    /**
-     * Finds the first array field in a JSON object — this is the "records" array.
-     *
-     * <p>Checks known keys first (raw_names, normalized_candidates, etc.),
-     * then falls back to the first array field found.</p>
-     */
     private String findPrimaryArrayKey(JsonNode root) {
-        // Check known candidate array keys in priority order
         String[] knownKeys = {
                 "raw_names", "entities_found",
                 "normalized_candidates", "deduped_candidates",
@@ -218,7 +227,6 @@ public class BatchAccumulatorTool {
             }
         }
 
-        // Fallback: first array field
         var fields = root.fields();
         while (fields.hasNext()) {
             var entry = fields.next();
@@ -230,9 +238,6 @@ public class BatchAccumulatorTool {
         return null;
     }
 
-    /**
-     * Renumbers the "id" field sequentially across all merged records.
-     */
     private void renumberIds(ArrayNode records) {
         for (int i = 0; i < records.size(); i++) {
             JsonNode record = records.get(i);
@@ -242,10 +247,6 @@ public class BatchAccumulatorTool {
         }
     }
 
-    /**
-     * Copies non-array scalar fields from source to target
-     * (e.g., metadata fields like "extraction_summary", "total_count").
-     */
     private void copyNonArrayFields(JsonNode source, ObjectNode target, String skipArrayKey) {
         var fields = source.fields();
         while (fields.hasNext()) {
@@ -256,27 +257,16 @@ public class BatchAccumulatorTool {
         }
     }
 
-    /**
-     * Fallback: if structured merge fails, concatenate batch strings.
-     * This preserves data even if JSON structure is unexpected.
-     */
-    private String fallbackConcatenate() {
+    private String fallbackConcatenate(List<String> batchList) {
         StringBuilder sb = new StringBuilder("{\"merged_batches\":[");
-        for (int i = 0; i < batches.size(); i++) {
+        for (int i = 0; i < batchList.size(); i++) {
             if (i > 0) sb.append(',');
-            sb.append(batches.get(i));
+            sb.append(batchList.get(i));
         }
         sb.append("]}");
         return sb.toString();
     }
 
-    // =========================================================================
-    //  Helpers
-    // =========================================================================
-
-    /**
-     * Counts records in a JSON batch by finding the first array and returning its size.
-     */
     private int countRecords(String jsonBatch) {
         try {
             JsonNode root = objectMapper.readTree(jsonBatch);
