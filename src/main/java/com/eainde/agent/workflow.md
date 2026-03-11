@@ -173,3 +173,28 @@ RESUME CALL: resumeWorkflowSync("abc-123", "kycWorkflow", inputs)
   The Killer Argument
   The YAML DAG generator is designed for shallow, prompt-chain workflows — think chatbots, simple Q&A, single-step document summarisation. Your KYC/compliance domain requires deep, compound reasoning with enterprise reliability guarantees. The moment their architecture hits a real compliance workflow — multi-document CSM extraction, eligibility classification with override logic, checkpoint recovery after a Gemini API timeout — the YAML model requires them to either: (a) explode the graph into dozens of nodes, or (b) hide complexity in python callables, at which point they've reinvented your architecture but less cleanly.
   Your two-tier approach is essentially what they'd evolve into naturally once their workflows get complex. You've just built the right abstraction from the start.
+
+
+
+
+
+  Strengths
+
+  Workflow authoring becomes configuration — teams could theoretically define new flows without Java code
+  Consistency — all workflows follow the same structural contract, easier to audit and version YAML files
+  Visualisation — a YAML spec can be rendered as a graph diagram automatically
+  Lower barrier for simple workflows — a 3-node linear flow takes 20 lines of YAML
+
+  Weaknesses — and these are significant for your context
+  1. You're building a framework on top of a framework.
+  LangGraph4j already IS your DAG executor. Building a YAML interpreter that then drives LangGraph4j adds an entire translation layer — YAML → Java DAG model → LangGraph4j graph. Every LangGraph4j feature (conditional edges, parallel nodes, checkpointing) needs to be re-exposed through your YAML schema. You'll spend months building the framework before writing a single business workflow.
+  2. String-based references destroy type safety.
+  The callable pattern ("projects.my_project.predicates:should_loop") means all your agent wiring is strings. Refactoring a class name? No compiler error — just a runtime ClassNotFoundException in production. This is a massive regression from where you are today.
+  3. Complex reasoning nodes don't fit the model.
+  Your CSM 9-step chain cannot be expressed as a single YAML node cleanly. You'd either expose it as a subgraph YAML (defeating the simplicity argument) or as a callable (hiding it behind a string reference, back to square one). The YAML model fundamentally assumes each node is one LLM call.
+  4. Debugging becomes harder.
+  When a workflow fails today, you have a full Spring stack trace, Langfuse trace, and Oracle audit log pointing to the exact agent and step. With YAML-driven execution, the stack trace points into your interpreter runtime — not into the business logic. Diagnosing failures in a compliance workflow becomes much harder.
+  5. YAML has no business logic expressiveness.
+  Retry policies, backoff strategies, partial failure recovery, conditional prompt selection based on document type — none of this can live in YAML cleanly. It all falls back to callable references, meaning you maintain Java and YAML simultaneously for every complex workflow.
+  6. The operational overhead is real.
+  YAML files need versioning, validation, schema enforcement, deployment pipelines, environment-specific overrides. For a bank, this means InfoSec review of YAML schema changes alongside code reviews. You've added a second artifact type with all the governance overhead of code but fewer of the safety guarantees.
