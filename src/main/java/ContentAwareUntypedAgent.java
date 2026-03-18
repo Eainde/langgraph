@@ -10,6 +10,22 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
+/**
+ * ┌───────────────────────┬──────┬──────┬──────┬───────┬──────────┬────────────┐
+ * │ Agent                 │ Temp │ TopP │ TopK │ Seed  │ Thinking │ MaxOutput  │
+ * ├───────────────────────┼──────┼──────┼──────┼───────┼──────────┼────────────┤
+ * │ Candidate Extractor   │ 0.0  │ 1.0  │  1   │  42   │   4096   │   16384    │
+ * │ Source Classifier     │ 0.0  │ 1.0  │  1   │  42   │   8192   │    4096    │
+ * │ Name Normalizer       │ 0.0  │ 1.0  │  1   │  42   │   4096   │   16384    │
+ * │ Dedup Linker          │ 0.0  │ 1.0  │  1   │  42   │   8192   │    8192    │
+ * │ Classifier-Enricher   │ 0.0  │ 1.0  │  1   │  42   │  16384   │   16384    │
+ * │ Scoring Engine        │ 0.0  │ 1.0  │  1   │  42   │   8192   │   16384    │
+ * │ Reason Assembler      │ 0.0  │ 1.0  │  1   │  42   │   4096   │   32768    │
+ * │ Output Formatter      │ 0.0  │ 1.0  │  1   │  42   │   2048   │   32768    │
+ * │ Extraction Critic     │ 0.2  │ 0.95 │  20  │  42   │  16384   │    8192    │
+ * │ Output Refiner        │ 0.0  │ 1.0  │  1   │  42   │   8192   │   32768    │
+ * └───────────────────────┴──────┴──────┴──────┴───────┴──────────┴────────────┘
+ */
 @Slf4j
 @Builder
 public class ContentAwareUntypedAgent implements UntypedAgent {
