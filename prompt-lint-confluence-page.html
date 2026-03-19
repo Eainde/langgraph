@@ -1,0 +1,649 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Prompt Lint — Confluence Page</title>
+</head>
+<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size: 14px; line-height: 1.714; color: #172b4d; max-width: 900px; margin: 0 auto; padding: 32px 24px;">
+
+<!-- ====== STATUS BANNER ====== -->
+<table style="width: 100%; border-collapse: collapse; margin-bottom: 24px;">
+    <tr>
+        <td style="padding: 16px 20px; background-color: #deebff; border-radius: 4px; border-left: 4px solid #0052cc;">
+            <span style="font-size: 15px; font-weight: 600; color: #0052cc;">ℹ️ Prompt Lint</span> &nbsp;
+            <span style="display: inline-block; background-color: #e3fcef; color: #006644; padding: 2px 8px; border-radius: 3px; font-size: 11px; font-weight: 700;">ACTIVE</span> &nbsp;
+            <span style="display: inline-block; background-color: #deebff; color: #0052cc; padding: 2px 8px; border-radius: 3px; font-size: 11px; font-weight: 700;">v1.0.0</span> &nbsp;
+            <span style="display: inline-block; background-color: #eae6ff; color: #6554c0; padding: 2px 8px; border-radius: 3px; font-size: 11px; font-weight: 700;">Java 17+</span>
+            <br/>
+            <span style="font-size: 13px; color: #5e6c84;">
+                Owner: AI Platform Team &nbsp;|&nbsp;
+                Repository: <a href="https://github.com/Eainde/prompt-lint" style="color: #0052cc;">github.com/Eainde/prompt-lint</a> &nbsp;|&nbsp;
+                Last updated: March 2026
+            </span>
+        </td>
+    </tr>
+</table>
+
+<!-- ====== SUMMARY ====== -->
+<p style="font-size: 15px; color: #172b4d; margin-bottom: 24px;">
+    A Java library that statically analyzes LLM prompt quality — <strong>no LLM calls required</strong>. It scores prompts across 8 quality dimensions, flags issues by severity, and produces detailed reports. Runs in milliseconds, integrates into CI, and catches prompt regressions before they hit production.
+</p>
+
+<hr style="border: none; border-top: 1px solid #dfe1e6; margin: 24px 0;"/>
+
+<!-- ====== TABLE OF CONTENTS ====== -->
+<table style="width: 100%; border-collapse: collapse; margin-bottom: 32px;">
+    <tr>
+        <td style="padding: 16px 20px; background-color: #f4f5f7; border: 1px solid #dfe1e6; border-radius: 4px;">
+            <p style="font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.8px; color: #5e6c84; margin: 0 0 10px 0;">On This Page</p>
+            <ol style="margin: 0; padding-left: 20px; font-size: 14px; color: #0052cc;">
+                <li style="padding: 2px 0;"><a href="#overview" style="color: #0052cc; text-decoration: none;">Overview &amp; Motivation</a></li>
+                <li style="padding: 2px 0;"><a href="#dimensions" style="color: #0052cc; text-decoration: none;">Quality Dimensions</a></li>
+                <li style="padding: 2px 0;"><a href="#architecture" style="color: #0052cc; text-decoration: none;">Architecture</a></li>
+                <li style="padding: 2px 0;"><a href="#getting-started" style="color: #0052cc; text-decoration: none;">Getting Started</a></li>
+                <li style="padding: 2px 0;"><a href="#agent-profiles" style="color: #0052cc; text-decoration: none;">Agent Type Profiles</a></li>
+                <li style="padding: 2px 0;"><a href="#junit" style="color: #0052cc; text-decoration: none;">JUnit Integration &amp; CI Usage</a></li>
+                <li style="padding: 2px 0;"><a href="#report" style="color: #0052cc; text-decoration: none;">Report Output</a></li>
+                <li style="padding: 2px 0;"><a href="#issue-codes" style="color: #0052cc; text-decoration: none;">Issue Codes &amp; Severity</a></li>
+                <li style="padding: 2px 0;"><a href="#use-cases" style="color: #0052cc; text-decoration: none;">Use Cases</a></li>
+                <li style="padding: 2px 0;"><a href="#faq" style="color: #0052cc; text-decoration: none;">FAQ</a></li>
+                <li style="padding: 2px 0;"><a href="#roadmap" style="color: #0052cc; text-decoration: none;">Roadmap</a></li>
+            </ol>
+        </td>
+    </tr>
+</table>
+
+<!-- ================================================================ -->
+<!-- 1. OVERVIEW -->
+<!-- ================================================================ -->
+<h2 id="overview" style="font-size: 20px; font-weight: 600; color: #172b4d; margin-top: 32px; padding-bottom: 8px; border-bottom: 1px solid #dfe1e6;">1. Overview &amp; Motivation</h2>
+
+<p><strong>Prompts are code.</strong> They define how LLM agents behave — what they extract, how they classify, what format they return. Yet unlike application code, prompts have no linting, no static analysis, and no automated quality gates.</p>
+
+<p>In practice, prompts silently degrade over time. Someone adds vague language, removes the output schema, or introduces contradictory rules. The LLM starts hallucinating or returning malformed output, and nobody can pinpoint when the regression happened because nobody was testing the prompts themselves.</p>
+
+<p><strong>Prompt Lint</strong> brings the discipline of static analysis to LLM prompts:</p>
+
+<ul>
+    <li><strong>Rule-based, deterministic analysis</strong> — no LLM calls, no API keys, no latency</li>
+    <li><strong>8 orthogonal quality dimensions</strong> — from clarity and specificity to injection resistance</li>
+    <li><strong>Weighted scoring by agent type</strong> — extraction agents weight groundedness higher; formatters weight output contract higher</li>
+    <li><strong>CI integration</strong> — set a quality threshold, run on every commit, fail the build on regressions</li>
+    <li><strong>JUnit assertion API</strong> — test prompts the same way you test code</li>
+</ul>
+
+<!-- Key Benefits Panel -->
+<table style="width: 100%; border-collapse: collapse; margin: 16px 0;">
+    <tr>
+        <td style="padding: 16px 20px; background-color: #e3fcef; border-left: 4px solid #00875a; border-radius: 4px;">
+            <p style="font-weight: 600; color: #006644; margin: 0 0 4px 0;">✅ Key Benefits</p>
+            <p style="margin: 0; color: #006644; font-size: 14px;">Analysis runs in <strong>milliseconds</strong>. No network calls, no API keys, no flaky tests. The same prompt always produces the same score — fully deterministic. The only runtime dependency is Jackson for JSON validation.</p>
+        </td>
+    </tr>
+</table>
+
+<!-- ================================================================ -->
+<!-- 2. QUALITY DIMENSIONS -->
+<!-- ================================================================ -->
+<h2 id="dimensions" style="font-size: 20px; font-weight: 600; color: #172b4d; margin-top: 32px; padding-bottom: 8px; border-bottom: 1px solid #dfe1e6;">2. Quality Dimensions</h2>
+
+<p>Prompt Lint evaluates prompts across 8 independent quality dimensions. Each dimension captures a different aspect of prompt quality and runs a series of rule-based checks.</p>
+
+<table style="width: 100%; border-collapse: collapse; margin: 16px 0;">
+    <thead>
+        <tr>
+            <th style="background-color: #f4f5f7; padding: 10px 14px; text-align: left; border: 1px solid #dfe1e6; font-weight: 600; font-size: 13px; color: #172b4d;">Dimension</th>
+            <th style="background-color: #f4f5f7; padding: 10px 14px; text-align: left; border: 1px solid #dfe1e6; font-weight: 600; font-size: 13px; color: #172b4d;">Code</th>
+            <th style="background-color: #f4f5f7; padding: 10px 14px; text-align: left; border: 1px solid #dfe1e6; font-weight: 600; font-size: 13px; color: #172b4d;">What It Checks</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;"><strong>Clarity</strong></td>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;"><span style="background-color: #deebff; color: #0052cc; padding: 2px 6px; border-radius: 3px; font-size: 12px; font-weight: 600;">CLR</span></td>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;">Role definition, task statement, imperative verbs, vague language detection, output format section, task-before-rules ordering</td>
+        </tr>
+        <tr>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;"><strong>Specificity</strong></td>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;"><span style="background-color: #eae6ff; color: #6554c0; padding: 2px 6px; border-radius: 3px; font-size: 12px; font-weight: 600;">SPC</span></td>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;">Numbered rules, concrete examples, quantified thresholds, boundary conditions, enum constraints</td>
+        </tr>
+        <tr>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;"><strong>Groundedness</strong></td>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;"><span style="background-color: #e3fcef; color: #006644; padding: 2px 6px; border-radius: 3px; font-size: 12px; font-weight: 600;">GND</span></td>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;">Source-grounding phrases, anti-hallucination guards, evidence requirements, citation instructions</td>
+        </tr>
+        <tr>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;"><strong>Output Contract</strong></td>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;"><span style="background-color: #e6fcff; color: #008da6; padding: 2px 6px; border-radius: 3px; font-size: 12px; font-weight: 600;">OUT</span></td>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;">JSON examples present and valid, field-level documentation, schema completeness</td>
+        </tr>
+        <tr>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;"><strong>Constraint Coverage</strong></td>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;"><span style="background-color: #fffae6; color: #946f00; padding: 2px 6px; border-radius: 3px; font-size: 12px; font-weight: 600;">CON</span></td>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;">Edge case handling, null/empty handling, error handling, ordering rules, boundary conditions</td>
+        </tr>
+        <tr>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;"><strong>Consistency</strong></td>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;"><span style="background-color: #eae6ff; color: #6554c0; padding: 2px 6px; border-radius: 3px; font-size: 12px; font-weight: 600;">CST</span></td>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;">Template variable alignment with declared inputs, contradictory instructions, terminology consistency</td>
+        </tr>
+        <tr>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;"><strong>Token Efficiency</strong></td>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;"><span style="background-color: #e6fcff; color: #008da6; padding: 2px 6px; border-radius: 3px; font-size: 12px; font-weight: 600;">TKN</span></td>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;">Prompt length vs complexity ratio, redundancy detection, filler removal</td>
+        </tr>
+        <tr>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;"><strong>Injection Resistance</strong></td>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;"><span style="background-color: #ffebe6; color: #bf2600; padding: 2px 6px; border-radius: 3px; font-size: 12px; font-weight: 600;">INJ</span></td>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;">System/user boundary enforcement, input sanitization, refusal instructions, role-lock phrases</td>
+        </tr>
+    </tbody>
+</table>
+
+<!-- ================================================================ -->
+<!-- 3. ARCHITECTURE -->
+<!-- ================================================================ -->
+<h2 id="architecture" style="font-size: 20px; font-weight: 600; color: #172b4d; margin-top: 32px; padding-bottom: 8px; border-bottom: 1px solid #dfe1e6;">3. Architecture</h2>
+
+<p>The library follows a simple pipeline architecture. The <code style="background-color: #f4f5f7; padding: 1px 6px; border-radius: 3px; font-size: 13px; color: #172b4d;">PromptQualityAnalyzer</code> orchestrates a set of dimension-specific analyzers, each running independently against the prompt text.</p>
+
+<!-- Architecture Flow Diagram using table -->
+<table style="width: 100%; border-collapse: collapse; margin: 24px 0; text-align: center;">
+    <tr>
+        <td style="padding: 12px 16px; background-color: #ffffff; border: 2px solid #0052cc; border-radius: 6px; font-size: 13px; font-weight: 600; color: #0052cc; width: 20%;">PromptUnderTest</td>
+        <td style="padding: 8px; font-size: 20px; color: #5e6c84; width: 5%;">→</td>
+        <td style="padding: 12px 16px; background-color: #0052cc; border-radius: 6px; font-size: 13px; font-weight: 600; color: #ffffff; width: 25%;">PromptQualityAnalyzer</td>
+        <td style="padding: 8px; font-size: 20px; color: #5e6c84; width: 5%;">→</td>
+        <td style="padding: 12px 16px; background-color: #ffffff; border: 2px solid #0052cc; border-radius: 6px; font-size: 13px; font-weight: 600; color: #0052cc; width: 25%;">8 Dimension Analyzers</td>
+        <td style="padding: 8px; font-size: 20px; color: #5e6c84; width: 5%;">→</td>
+        <td style="padding: 12px 16px; background-color: #ffffff; border: 2px solid #0052cc; border-radius: 6px; font-size: 13px; font-weight: 600; color: #0052cc; width: 20%;">PromptQualityReport</td>
+    </tr>
+</table>
+
+<h3 style="font-size: 16px; font-weight: 600; color: #172b4d; margin-top: 24px;">Key Components</h3>
+
+<table style="width: 100%; border-collapse: collapse; margin: 12px 0;">
+    <thead>
+        <tr>
+            <th style="background-color: #f4f5f7; padding: 10px 14px; text-align: left; border: 1px solid #dfe1e6; font-weight: 600; font-size: 13px;">Component</th>
+            <th style="background-color: #f4f5f7; padding: 10px 14px; text-align: left; border: 1px solid #dfe1e6; font-weight: 600; font-size: 13px;">Responsibility</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;"><code style="background-color: #f4f5f7; padding: 1px 6px; border-radius: 3px; font-size: 13px;">PromptUnderTest</code></td>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;">Wraps the prompt with metadata: system/user text, declared inputs/outputs, agent profile</td>
+        </tr>
+        <tr>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;"><code style="background-color: #f4f5f7; padding: 1px 6px; border-radius: 3px; font-size: 13px;">PromptQualityAnalyzer</code></td>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;">Orchestrates all dimension analyzers, aggregates scores using profile weights</td>
+        </tr>
+        <tr>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;"><code style="background-color: #f4f5f7; padding: 1px 6px; border-radius: 3px; font-size: 13px;">AgentTypeProfile</code></td>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;">Defines dimension weights per agent type (EXTRACTION, CLASSIFICATION, etc.)</td>
+        </tr>
+        <tr>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;"><code style="background-color: #f4f5f7; padding: 1px 6px; border-radius: 3px; font-size: 13px;">PromptQualityReport</code></td>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;">Holds overall score, per-dimension scores, and all flagged issues</td>
+        </tr>
+        <tr>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;"><code style="background-color: #f4f5f7; padding: 1px 6px; border-radius: 3px; font-size: 13px;">PromptQualityReportRenderer</code></td>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;">Renders reports as formatted console output (CI-friendly)</td>
+        </tr>
+        <tr>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;"><code style="background-color: #f4f5f7; padding: 1px 6px; border-radius: 3px; font-size: 13px;">PromptQualityAssert</code></td>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;">Fluent assertion API for JUnit tests</td>
+        </tr>
+    </tbody>
+</table>
+
+<!-- ================================================================ -->
+<!-- 4. GETTING STARTED -->
+<!-- ================================================================ -->
+<h2 id="getting-started" style="font-size: 20px; font-weight: 600; color: #172b4d; margin-top: 32px; padding-bottom: 8px; border-bottom: 1px solid #dfe1e6;">4. Getting Started</h2>
+
+<h3 style="font-size: 16px; font-weight: 600; color: #172b4d; margin-top: 20px;">Maven Dependency</h3>
+
+<pre style="background-color: #f4f5f7; border: 1px solid #dfe1e6; border-radius: 4px; padding: 16px; font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace; font-size: 13px; line-height: 1.6; overflow-x: auto; color: #172b4d;">&lt;dependency&gt;
+    &lt;groupId&gt;com.eainde&lt;/groupId&gt;
+    &lt;artifactId&gt;prompt-lint&lt;/artifactId&gt;
+    &lt;version&gt;1.0.0&lt;/version&gt;
+    &lt;scope&gt;test&lt;/scope&gt;
+&lt;/dependency&gt;</pre>
+
+<h3 style="font-size: 16px; font-weight: 600; color: #172b4d; margin-top: 24px;">Basic Usage</h3>
+
+<pre style="background-color: #f4f5f7; border: 1px solid #dfe1e6; border-radius: 4px; padding: 16px; font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace; font-size: 13px; line-height: 1.6; overflow-x: auto; color: #172b4d;">import com.eainde.prompt.quality.PromptQualityAnalyzer;
+import com.eainde.prompt.quality.model.AgentTypeProfile;
+import com.eainde.prompt.quality.model.PromptUnderTest;
+import com.eainde.prompt.quality.report.PromptQualityReport;
+
+import java.util.Set;
+
+// 1. Create the analyzer
+var analyzer = PromptQualityAnalyzer.create();
+
+// 2. Wrap your prompt
+var prompt = new PromptUnderTest(
+    "my-extraction-agent",                  // agent name
+    systemPromptText,                       // system prompt
+    userPromptText,                         // user prompt
+    Set.of("sourceText", "fileNames"),      // declared input variables
+    "rawNames",                             // declared output key
+    AgentTypeProfile.EXTRACTION             // agent type profile
+);
+
+// 3. Analyze
+PromptQualityReport report = analyzer.analyze(prompt);
+
+// 4. Check results
+System.out.println("Score: " + report.overallScore());
+System.out.println("Critical issues: " + report.hasCriticalIssues());</pre>
+
+<h3 style="font-size: 16px; font-weight: 600; color: #172b4d; margin-top: 24px;">Analyze Multiple Agents</h3>
+
+<pre style="background-color: #f4f5f7; border: 1px solid #dfe1e6; border-radius: 4px; padding: 16px; font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace; font-size: 13px; line-height: 1.6; overflow-x: auto; color: #172b4d;">var analyzer = PromptQualityAnalyzer.create();
+var renderer = new PromptQualityReportRenderer();
+
+List&lt;PromptUnderTest&gt; prompts = List.of(
+    extractorPrompt(),
+    classifierPrompt(),
+    formatterPrompt()
+);
+
+List&lt;PromptQualityReport&gt; reports = analyzer.analyzeAll(prompts);
+
+// Print CI summary
+System.out.println(renderer.renderSummary(reports, 0.75));</pre>
+
+<!-- ================================================================ -->
+<!-- 5. AGENT TYPE PROFILES -->
+<!-- ================================================================ -->
+<h2 id="agent-profiles" style="font-size: 20px; font-weight: 600; color: #172b4d; margin-top: 32px; padding-bottom: 8px; border-bottom: 1px solid #dfe1e6;">5. Agent Type Profiles</h2>
+
+<p>Each profile adjusts dimension weights to match what matters for that agent type. This means an extraction agent is scored differently than a formatting agent.</p>
+
+<table style="width: 100%; border-collapse: collapse; margin: 12px 0;">
+    <thead>
+        <tr>
+            <th style="background-color: #f4f5f7; padding: 10px 14px; text-align: left; border: 1px solid #dfe1e6; font-weight: 600; font-size: 13px;">Profile</th>
+            <th style="background-color: #f4f5f7; padding: 10px 14px; text-align: left; border: 1px solid #dfe1e6; font-weight: 600; font-size: 13px;">Top Weighted Dimensions</th>
+            <th style="background-color: #f4f5f7; padding: 10px 14px; text-align: left; border: 1px solid #dfe1e6; font-weight: 600; font-size: 13px;">Use When</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;"><code style="background-color: #f4f5f7; padding: 1px 6px; border-radius: 3px; font-size: 13px;">EXTRACTION</code></td>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;">Groundedness (0.25), Specificity (0.15), Output Contract (0.15)</td>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;">Extracting structured data from documents</td>
+        </tr>
+        <tr>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;"><code style="background-color: #f4f5f7; padding: 1px 6px; border-radius: 3px; font-size: 13px;">CLASSIFICATION</code></td>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;">Specificity (0.20), Constraint Coverage (0.20), Groundedness (0.15)</td>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;">Categorizing inputs into defined classes</td>
+        </tr>
+        <tr>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;"><code style="background-color: #f4f5f7; padding: 1px 6px; border-radius: 3px; font-size: 13px;">FORMATTING</code></td>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;">Output Contract (0.30), Consistency (0.15), Constraint Coverage (0.15)</td>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;">Transforming data into a specific output format</td>
+        </tr>
+        <tr>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;"><code style="background-color: #f4f5f7; padding: 1px 6px; border-radius: 3px; font-size: 13px;">REVIEW</code></td>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;">Groundedness (0.20), Specificity (0.15), Output Contract (0.15)</td>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;">Reviewing and validating content</td>
+        </tr>
+        <tr>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;"><code style="background-color: #f4f5f7; padding: 1px 6px; border-radius: 3px; font-size: 13px;">DEFAULT</code></td>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;">Equal weights (0.125 each)</td>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;">General-purpose agents or when unsure</td>
+        </tr>
+    </tbody>
+</table>
+
+<h3 style="font-size: 16px; font-weight: 600; color: #172b4d; margin-top: 24px;">Custom Profiles</h3>
+
+<pre style="background-color: #f4f5f7; border: 1px solid #dfe1e6; border-radius: 4px; padding: 16px; font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace; font-size: 13px; line-height: 1.6; overflow-x: auto; color: #172b4d;">var customProfile = new AgentTypeProfile("MY_AGENT", Map.of(
+    "CLARITY",              0.20,
+    "SPECIFICITY",          0.20,
+    "GROUNDEDNESS",         0.10,
+    "OUTPUT_CONTRACT",      0.20,
+    "CONSTRAINT_COVERAGE",  0.10,
+    "CONSISTENCY",          0.10,
+    "TOKEN_EFFICIENCY",     0.05,
+    "INJECTION_RESISTANCE", 0.05
+));</pre>
+
+<!-- Warning Panel -->
+<table style="width: 100%; border-collapse: collapse; margin: 16px 0;">
+    <tr>
+        <td style="padding: 16px 20px; background-color: #fffae6; border-left: 4px solid #ff991f; border-radius: 4px;">
+            <p style="font-weight: 600; color: #946f00; margin: 0 0 4px 0;">⚠️ Important</p>
+            <p style="margin: 0; color: #946f00; font-size: 14px;">Custom profile weights must sum to <strong>1.0</strong>. All 8 dimensions must be included in the weight map.</p>
+        </td>
+    </tr>
+</table>
+
+<!-- ================================================================ -->
+<!-- 6. JUNIT INTEGRATION -->
+<!-- ================================================================ -->
+<h2 id="junit" style="font-size: 20px; font-weight: 600; color: #172b4d; margin-top: 32px; padding-bottom: 8px; border-bottom: 1px solid #dfe1e6;">6. JUnit Integration &amp; CI Usage</h2>
+
+<h3 style="font-size: 16px; font-weight: 600; color: #172b4d; margin-top: 20px;">Quality Gate Test</h3>
+
+<pre style="background-color: #f4f5f7; border: 1px solid #dfe1e6; border-radius: 4px; padding: 16px; font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace; font-size: 13px; line-height: 1.6; overflow-x: auto; color: #172b4d;">import static com.eainde.prompt.quality.PromptQualityAssert.assertThat;
+
+@Test
+void promptMeetsQualityBar() {
+    var analyzer = PromptQualityAnalyzer.create();
+    var report = analyzer.analyze(myPrompt());
+
+    assertThat(report)
+        .passesThreshold(0.75)
+        .hasNoCriticalIssues()
+        .dimensionScoreAbove("GROUNDEDNESS", 0.80)
+        .dimensionScoreAbove("OUTPUT_CONTRACT", 0.70)
+        .hasFewerIssuesThan(10);
+}</pre>
+
+<h3 style="font-size: 16px; font-weight: 600; color: #172b4d; margin-top: 24px;">Regression Testing</h3>
+
+<p>Once you fix an issue, encode it as a test so it doesn't regress:</p>
+
+<pre style="background-color: #f4f5f7; border: 1px solid #dfe1e6; border-radius: 4px; padding: 16px; font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace; font-size: 13px; line-height: 1.6; overflow-x: auto; color: #172b4d;">@Test
+void fixedIssueStaysFixed() {
+    var report = analyzer.analyze(myPrompt());
+
+    assertThat(report)
+        .doesNotHaveIssue("CLR-005")   // output format section was added
+        .doesNotHaveIssue("OUT-001");   // JSON example was added
+}</pre>
+
+<h3 style="font-size: 16px; font-weight: 600; color: #172b4d; margin-top: 24px;">Assertion API Reference</h3>
+
+<table style="width: 100%; border-collapse: collapse; margin: 12px 0;">
+    <thead>
+        <tr>
+            <th style="background-color: #f4f5f7; padding: 10px 14px; text-align: left; border: 1px solid #dfe1e6; font-weight: 600; font-size: 13px;">Method</th>
+            <th style="background-color: #f4f5f7; padding: 10px 14px; text-align: left; border: 1px solid #dfe1e6; font-weight: 600; font-size: 13px;">Description</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;"><code style="background-color: #f4f5f7; padding: 1px 6px; border-radius: 3px; font-size: 13px;">passesThreshold(double)</code></td>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;">Asserts overall score ≥ threshold</td>
+        </tr>
+        <tr>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;"><code style="background-color: #f4f5f7; padding: 1px 6px; border-radius: 3px; font-size: 13px;">hasNoCriticalIssues()</code></td>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;">Asserts no CRITICAL severity issues found</td>
+        </tr>
+        <tr>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;"><code style="background-color: #f4f5f7; padding: 1px 6px; border-radius: 3px; font-size: 13px;">dimensionScoreAbove(dim, score)</code></td>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;">Asserts a specific dimension score ≥ value</td>
+        </tr>
+        <tr>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;"><code style="background-color: #f4f5f7; padding: 1px 6px; border-radius: 3px; font-size: 13px;">hasFewerIssuesThan(count)</code></td>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;">Asserts total issue count &lt; value</td>
+        </tr>
+        <tr>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;"><code style="background-color: #f4f5f7; padding: 1px 6px; border-radius: 3px; font-size: 13px;">doesNotHaveIssue(code)</code></td>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;">Asserts a specific issue code is absent (regression guard)</td>
+        </tr>
+    </tbody>
+</table>
+
+<!-- ================================================================ -->
+<!-- 7. REPORT OUTPUT -->
+<!-- ================================================================ -->
+<h2 id="report" style="font-size: 20px; font-weight: 600; color: #172b4d; margin-top: 32px; padding-bottom: 8px; border-bottom: 1px solid #dfe1e6;">7. Report Output</h2>
+
+<p>The <code style="background-color: #f4f5f7; padding: 1px 6px; border-radius: 3px; font-size: 13px;">PromptQualityReportRenderer</code> produces formatted console output suitable for CI logs:</p>
+
+<pre style="background-color: #263238; border-radius: 4px; padding: 20px; font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace; font-size: 12px; line-height: 1.6; overflow-x: auto; color: #eeffff;">═══════════════════════════════════════════════════════════════
+  PROMPT QUALITY REPORT: my-extraction-agent
+  Profile: EXTRACTION
+═══════════════════════════════════════════════════════════════
+
+  Overall Score: 0.82 / 1.00  ✅ PASS (threshold: 0.75)
+
+  ┌────────────────────────┬───────┬────────┬─────────┐
+  │ Dimension              │ Score │ Weight │ Contrib │
+  ├────────────────────────┼───────┼────────┼─────────┤
+  │   CLARITY              │  0.83 │  0.10  │  0.083  │
+  │   SPECIFICITY          │  0.75 │  0.15  │  0.113  │
+  │   GROUNDEDNESS         │  0.90 │  0.25  │  0.225  │
+  │   OUTPUT_CONTRACT      │  0.80 │  0.15  │  0.120  │
+  │   CONSTRAINT_COVERAGE  │  0.78 │  0.10  │  0.078  │
+  │   CONSISTENCY          │  0.85 │  0.10  │  0.085  │
+  │   TOKEN_EFFICIENCY     │  0.70 │  0.10  │  0.070  │
+  │   INJECTION_RESISTANCE │  0.90 │  0.05  │  0.045  │
+  └────────────────────────┴───────┴────────┴─────────┘
+
+  Issues Found: 3 total (0 critical, 2 warning, 1 info)
+    ⚠ WARNING  [CLR-004] Vague language detected: [try to]
+    ⚠ WARNING  [SPC-002] No quantified thresholds found
+    ℹ INFO     [CLR-007] Ambiguous quantifiers found: [some of]
+
+  Suggestions:
+    1. Replace vague phrases with imperative: 'try to extract' → 'Extract'
+    2. Add quantified thresholds where possible
+═══════════════════════════════════════════════════════════════</pre>
+
+<!-- ================================================================ -->
+<!-- 8. ISSUE CODES & SEVERITY -->
+<!-- ================================================================ -->
+<h2 id="issue-codes" style="font-size: 20px; font-weight: 600; color: #172b4d; margin-top: 32px; padding-bottom: 8px; border-bottom: 1px solid #dfe1e6;">8. Issue Codes &amp; Severity</h2>
+
+<h3 style="font-size: 16px; font-weight: 600; color: #172b4d; margin-top: 20px;">Severity Levels</h3>
+
+<table style="width: 100%; border-collapse: collapse; margin: 12px 0;">
+    <thead>
+        <tr>
+            <th style="background-color: #f4f5f7; padding: 10px 14px; text-align: left; border: 1px solid #dfe1e6; font-weight: 600; font-size: 13px;">Severity</th>
+            <th style="background-color: #f4f5f7; padding: 10px 14px; text-align: left; border: 1px solid #dfe1e6; font-weight: 600; font-size: 13px;">Meaning</th>
+            <th style="background-color: #f4f5f7; padding: 10px 14px; text-align: left; border: 1px solid #dfe1e6; font-weight: 600; font-size: 13px;">CI Impact</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;"><span style="background-color: #ffebe6; color: #bf2600; padding: 2px 8px; border-radius: 3px; font-size: 12px; font-weight: 600;">CRITICAL</span></td>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;">Prompt is missing something fundamental (e.g., no output format)</td>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;">Should fail the build</td>
+        </tr>
+        <tr>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;"><span style="background-color: #fffae6; color: #946f00; padding: 2px 8px; border-radius: 3px; font-size: 12px; font-weight: 600;">WARNING</span></td>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;">Quality problem that should be fixed (e.g., vague language)</td>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;">Configurable — fail or warn</td>
+        </tr>
+        <tr>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;"><span style="background-color: #deebff; color: #0052cc; padding: 2px 8px; border-radius: 3px; font-size: 12px; font-weight: 600;">INFO</span></td>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;">Improvement opportunity (e.g., add more imperative verbs)</td>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;">Informational only</td>
+        </tr>
+    </tbody>
+</table>
+
+<h3 style="font-size: 16px; font-weight: 600; color: #172b4d; margin-top: 24px;">Issue Code Prefixes</h3>
+
+<table style="width: 100%; border-collapse: collapse; margin: 12px 0;">
+    <thead>
+        <tr>
+            <th style="background-color: #f4f5f7; padding: 10px 14px; text-align: left; border: 1px solid #dfe1e6; font-weight: 600; font-size: 13px;">Prefix</th>
+            <th style="background-color: #f4f5f7; padding: 10px 14px; text-align: left; border: 1px solid #dfe1e6; font-weight: 600; font-size: 13px;">Dimension</th>
+            <th style="background-color: #f4f5f7; padding: 10px 14px; text-align: left; border: 1px solid #dfe1e6; font-weight: 600; font-size: 13px;">Example Issues</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;"><code style="background-color: #f4f5f7; padding: 1px 6px; border-radius: 3px; font-size: 13px;">CLR-</code></td>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;">Clarity</td>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;">CLR-004 (vague language), CLR-005 (missing output format), CLR-007 (ambiguous quantifiers)</td>
+        </tr>
+        <tr>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;"><code style="background-color: #f4f5f7; padding: 1px 6px; border-radius: 3px; font-size: 13px;">SPC-</code></td>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;">Specificity</td>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;">SPC-002 (no quantified thresholds)</td>
+        </tr>
+        <tr>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;"><code style="background-color: #f4f5f7; padding: 1px 6px; border-radius: 3px; font-size: 13px;">GND-</code></td>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;">Groundedness</td>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;">GND-001 (no source grounding)</td>
+        </tr>
+        <tr>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;"><code style="background-color: #f4f5f7; padding: 1px 6px; border-radius: 3px; font-size: 13px;">OUT-</code></td>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;">Output Contract</td>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;">OUT-001 (no JSON example), OUT-002 (invalid JSON)</td>
+        </tr>
+        <tr>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;"><code style="background-color: #f4f5f7; padding: 1px 6px; border-radius: 3px; font-size: 13px;">CON-</code></td>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;">Constraint Coverage</td>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;">CON-001 (no edge case handling)</td>
+        </tr>
+        <tr>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;"><code style="background-color: #f4f5f7; padding: 1px 6px; border-radius: 3px; font-size: 13px;">CST-</code></td>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;">Consistency</td>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;">CST-001 (template variable mismatch)</td>
+        </tr>
+        <tr>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;"><code style="background-color: #f4f5f7; padding: 1px 6px; border-radius: 3px; font-size: 13px;">TKN-</code></td>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;">Token Efficiency</td>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;">TKN-001 (redundant instructions)</td>
+        </tr>
+        <tr>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;"><code style="background-color: #f4f5f7; padding: 1px 6px; border-radius: 3px; font-size: 13px;">INJ-</code></td>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;">Injection Resistance</td>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;">INJ-001 (no system boundary)</td>
+        </tr>
+    </tbody>
+</table>
+
+<!-- ================================================================ -->
+<!-- 9. USE CASES -->
+<!-- ================================================================ -->
+<h2 id="use-cases" style="font-size: 20px; font-weight: 600; color: #172b4d; margin-top: 32px; padding-bottom: 8px; border-bottom: 1px solid #dfe1e6;">9. Use Cases</h2>
+
+<table style="width: 100%; border-collapse: collapse; margin: 16px 0;">
+    <thead>
+        <tr>
+            <th style="background-color: #f4f5f7; padding: 10px 14px; text-align: left; border: 1px solid #dfe1e6; font-weight: 600; font-size: 13px;">Use Case</th>
+            <th style="background-color: #f4f5f7; padding: 10px 14px; text-align: left; border: 1px solid #dfe1e6; font-weight: 600; font-size: 13px;">Description</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6; font-weight: 600;">CI/CD Quality Gates</td>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;">Set a minimum score threshold and fail the build if any prompt drops below it. Turns prompt quality from a subjective review into an automated check.</td>
+        </tr>
+        <tr>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6; font-weight: 600;">Multi-Agent Pipelines</td>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;">Validate all agent prompts in one test class with agent-specific profiles and thresholds. Extraction, classification, and formatting agents each get scored by what matters for them.</td>
+        </tr>
+        <tr>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6; font-weight: 600;">Code Review Assistance</td>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;">Include the rendered report in pull requests. Reviewers can immediately see if a prompt change introduced vague language, removed the output schema, or broke variable alignment.</td>
+        </tr>
+        <tr>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6; font-weight: 600;">Prompt Engineering Iteration</td>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;">Run the analyzer after each prompt change to see how the score shifts across dimensions. Like a code coverage report — but for your prompts.</td>
+        </tr>
+        <tr>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6; font-weight: 600;">Enterprise Governance</td>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;">Teams maintaining shared prompt libraries can enforce minimum quality standards across all agents, with different thresholds per agent type.</td>
+        </tr>
+    </tbody>
+</table>
+
+<!-- ================================================================ -->
+<!-- 10. FAQ -->
+<!-- ================================================================ -->
+<h2 id="faq" style="font-size: 20px; font-weight: 600; color: #172b4d; margin-top: 32px; padding-bottom: 8px; border-bottom: 1px solid #dfe1e6;">10. FAQ</h2>
+
+<p style="font-weight: 600; color: #172b4d; margin-top: 16px; margin-bottom: 4px;">Q: Does this require an LLM API call?</p>
+<p style="margin-top: 0;">No. All analysis is rule-based and deterministic. There are no LLM calls, no API keys, and no network requests. The library runs entirely in-process.</p>
+
+<p style="font-weight: 600; color: #172b4d; margin-top: 16px; margin-bottom: 4px;">Q: What Java version is required?</p>
+<p style="margin-top: 0;">Java 17 or higher. The library uses <code style="background-color: #f4f5f7; padding: 1px 6px; border-radius: 3px; font-size: 13px;">var</code>, records, and sealed classes from modern Java.</p>
+
+<p style="font-weight: 600; color: #172b4d; margin-top: 16px; margin-bottom: 4px;">Q: What are the runtime dependencies?</p>
+<p style="margin-top: 0;">Only <strong>Jackson</strong> (<code style="background-color: #f4f5f7; padding: 1px 6px; border-radius: 3px; font-size: 13px;">jackson-databind</code>) for JSON validation in the Output Contract analyzer. No other runtime dependencies.</p>
+
+<p style="font-weight: 600; color: #172b4d; margin-top: 16px; margin-bottom: 4px;">Q: Can I add custom rules?</p>
+<p style="margin-top: 0;">Custom agent type profiles (dimension weights) are supported today. Custom rule authoring for individual dimensions is on the roadmap.</p>
+
+<p style="font-weight: 600; color: #172b4d; margin-top: 16px; margin-bottom: 4px;">Q: How do I integrate this into CI?</p>
+<p style="margin-top: 0;">Add the dependency with <code style="background-color: #f4f5f7; padding: 1px 6px; border-radius: 3px; font-size: 13px;">&lt;scope&gt;test&lt;/scope&gt;</code>, write JUnit tests using <code style="background-color: #f4f5f7; padding: 1px 6px; border-radius: 3px; font-size: 13px;">PromptQualityAssert</code>, and set a quality threshold. The tests run as part of your normal <code style="background-color: #f4f5f7; padding: 1px 6px; border-radius: 3px; font-size: 13px;">mvn test</code> phase. If the score drops below the threshold, the build fails.</p>
+
+<p style="font-weight: 600; color: #172b4d; margin-top: 16px; margin-bottom: 4px;">Q: How is the overall score calculated?</p>
+<p style="margin-top: 0;">Each dimension analyzer produces a score between 0.0 and 1.0. The overall score is a <strong>weighted average</strong> of all dimension scores, where the weights come from the selected agent type profile. For example, the EXTRACTION profile weights Groundedness at 0.25 and Specificity at 0.15.</p>
+
+<!-- ================================================================ -->
+<!-- 11. ROADMAP -->
+<!-- ================================================================ -->
+<h2 id="roadmap" style="font-size: 20px; font-weight: 600; color: #172b4d; margin-top: 32px; padding-bottom: 8px; border-bottom: 1px solid #dfe1e6;">11. Roadmap</h2>
+
+<table style="width: 100%; border-collapse: collapse; margin: 12px 0;">
+    <thead>
+        <tr>
+            <th style="background-color: #f4f5f7; padding: 10px 14px; text-align: left; border: 1px solid #dfe1e6; font-weight: 600; font-size: 13px;">Item</th>
+            <th style="background-color: #f4f5f7; padding: 10px 14px; text-align: left; border: 1px solid #dfe1e6; font-weight: 600; font-size: 13px;">Status</th>
+            <th style="background-color: #f4f5f7; padding: 10px 14px; text-align: left; border: 1px solid #dfe1e6; font-weight: 600; font-size: 13px;">Description</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;">Core analyzer with 8 dimensions</td>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;"><span style="background-color: #e3fcef; color: #006644; padding: 2px 8px; border-radius: 3px; font-size: 11px; font-weight: 700;">DONE</span></td>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;">Rule-based analysis across all quality dimensions</td>
+        </tr>
+        <tr>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;">Agent type profiles</td>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;"><span style="background-color: #e3fcef; color: #006644; padding: 2px 8px; border-radius: 3px; font-size: 11px; font-weight: 700;">DONE</span></td>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;">Built-in profiles: EXTRACTION, CLASSIFICATION, FORMATTING, REVIEW, DEFAULT</td>
+        </tr>
+        <tr>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;">JUnit assertion API</td>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;"><span style="background-color: #e3fcef; color: #006644; padding: 2px 8px; border-radius: 3px; font-size: 11px; font-weight: 700;">DONE</span></td>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;">Fluent assertions for prompt quality testing</td>
+        </tr>
+        <tr>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;">Maven Central publication</td>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;"><span style="background-color: #fffae6; color: #946f00; padding: 2px 8px; border-radius: 3px; font-size: 11px; font-weight: 700;">IN PROGRESS</span></td>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;">Publishing under <code style="background-color: #f4f5f7; padding: 1px 6px; border-radius: 3px; font-size: 13px;">com.eainde</code> groupId</td>
+        </tr>
+        <tr>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;">CLI mode</td>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;"><span style="background-color: #eae6ff; color: #6554c0; padding: 2px 8px; border-radius: 3px; font-size: 11px; font-weight: 700;">PLANNED</span></td>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;">Run analysis from command line without JUnit</td>
+        </tr>
+        <tr>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;">Custom rule authoring</td>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;"><span style="background-color: #eae6ff; color: #6554c0; padding: 2px 8px; border-radius: 3px; font-size: 11px; font-weight: 700;">PLANNED</span></td>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;">Allow teams to define custom dimension checks</td>
+        </tr>
+        <tr>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;">Auto-fix suggestions</td>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;"><span style="background-color: #eae6ff; color: #6554c0; padding: 2px 8px; border-radius: 3px; font-size: 11px; font-weight: 700;">PLANNED</span></td>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;">Generate rewritten prompt sections for flagged issues</td>
+        </tr>
+        <tr>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;">Gradle plugin</td>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;"><span style="background-color: #eae6ff; color: #6554c0; padding: 2px 8px; border-radius: 3px; font-size: 11px; font-weight: 700;">PLANNED</span></td>
+            <td style="padding: 10px 14px; border: 1px solid #dfe1e6;">Native Gradle integration for non-Maven projects</td>
+        </tr>
+    </tbody>
+</table>
+
+<hr style="border: none; border-top: 1px solid #dfe1e6; margin: 32px 0;"/>
+
+<!-- ====== FOOTER PANEL ====== -->
+<table style="width: 100%; border-collapse: collapse; margin: 16px 0;">
+    <tr>
+        <td style="padding: 16px 20px; background-color: #eae6ff; border-left: 4px solid #6554c0; border-radius: 4px;">
+            <p style="font-weight: 600; color: #403294; margin: 0 0 4px 0;">💬 Questions or Feedback?</p>
+            <p style="margin: 0; color: #403294; font-size: 14px;">Open an issue on <a href="https://github.com/Eainde/prompt-lint/issues" style="color: #0052cc;">GitHub</a> or reach out to the AI Platform team. Contributions are welcome — see the repository for contribution guidelines.</p>
+        </td>
+    </tr>
+</table>
+
+</body>
+</html>
